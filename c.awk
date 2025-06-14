@@ -105,13 +105,14 @@ function lex(s, source,   line, col, i, token_index, symbol, found)
     s["num_tokens"] = token_index
 }
 
-function parse(s,      program) {
+function parse(s,      a) {
     s["parser_state", "token_index"] = 1
     s["parser_state", "ast_index"] = 1
 
-    program = start_node(s, "program")
+    a= start_node(s, "program")
     parse_function_decl(s)
-    end_node(s, program)
+    end_node(s, a)
+    return a
 }
 
 function parse_function_decl(s,     a) {
@@ -218,4 +219,3 @@ function print_ast_inner(s, ast_index, indent,    curr, end, i, attrs) {
     }
     return end
 }
-
