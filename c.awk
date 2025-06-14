@@ -19,15 +19,24 @@ BEGIN {
 
     S["input_file"] = INPUT_FILE
     lex(S, SOURCE)
+    # print "/*"
     # for (I = 1; I <= S["num_tokens"]; I++) {
     #     print S["tokens", I, "type"], S["tokens", I, "value"]
     # }
+    # printf("*/\n")
     close(INPUT_FILE)
 
     parse(S)
-    if (0) ast_print(S)
+
+    print "/*"
+    ast_print(S)
+    print "*/\n"
+
     lower(S)
-    if (0) ir_print(S)
+
+    print "/*"
+    ir_print(S)
+    print "*/\n"
 
     codegen(S)
 }
@@ -158,11 +167,42 @@ function parse_statment(s,     a) {
     return a
 }
 
-function parse_expr(s,     a) {
-    a = ast_start_node(s, "int")
-    ast_set_node_attr(s, a, "value", parser_expect(s, "int"))
-    ast_end_node(s, a)
-    return a
+function parse_expr(s) {
+    return parse_atom(s)
+}
+
+function parse_atom(s,     a) {
+    if (parser_peek(s) == "int") {
+        a = ast_start_node(s, "int")
+        ast_set_node_attr(s, a, "value", parser_advance(s))
+        ast_end_node(s, a)
+        return a
+    }
+    if (parser_accept(s, "-")) {
+        a = ast_start_node(s, "negate")
+        ast_set_node_attr(s, a, "expr", parse_expr(s))
+        ast_end_node(s, a)
+        return a
+    }
+    if (parser_accept(s, "!")) {
+        a = ast_start_node(s, "not")
+        ast_set_node_attr(s, a, "expr", parse_expr(s))
+        ast_end_node(s, a)
+        return a
+    }
+    if (parser_accept(s, "~")) {
+        a = ast_start_node(s, "bitwise_not")
+        ast_set_node_attr(s, a, "expr", parse_expr(s))
+        ast_end_node(s, a)
+        return a
+    }
+    if (parser_accept(s, "(")) {
+        a = parse_expr(s)
+        parser_expect(s, ")")
+        return a
+    }
+
+    parser_error("Expected expression")
 }
 
 function parser_expect(s, token_type,   value) {
@@ -174,6 +214,14 @@ function parser_expect(s, token_type,   value) {
 
 function parser_peek(s) {
     return s["tokens", s["parser_state", "token_index"], "type"]
+}
+
+function parser_accept(s, token_type) {
+    if (parser_peek(s) == token_type) {
+        parser_advance(s)
+        return 1
+    }
+    return 0
 }
 
 function parser_advance(s,    value) {
@@ -214,6 +262,10 @@ function ast_get_node_attr(s, ast_index, key) {
     return s["ast", ast_index, key]
 }
 
+function ast_get_node_type(s, ast_index) {
+    return s["ast", ast_index, "type"]
+}
+
 function ast_print(s) {
     print_ast_inner(s, 1, 0)
 }
@@ -241,14 +293,42 @@ function lower(s) {
     lower_function(s, 2)
 }
 
-function lower_function(s, ast_index) {
-    ir_function(s, ast_get_node_attr(s, ast_index, "name"))
+function lower_function(s, a) {
+    ir_function(s, ast_get_node_attr(s, a, "name"))
     ir_block(s)
-    lower_statement(s, ast_index+1)
+    lower_statement(s, a+1)
 }
 
-function lower_statement(s, ast_index) {
-    ir_instruction_return(s, ast_get_node_attr(s, ast_get_node_attr(s, ast_index, "expr"), "value"))
+function lower_statement(s, a,   x, instr) {
+    x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+    instr = ir_instruction_void(s, "return")
+    ir_instruction_set_attr(s, instr, "x",  x)
+}
+
+function lower_expr(s, a,    instr, x) {
+    if (ast_get_node_type(s, a) == "int") {
+        instr = ir_instruction(s, "constant")
+        ir_instruction_set_attr(s, instr, "c", ast_get_node_attr(s, a, "value"))
+        return ir_instruction_get_variable(s, instr)
+    }
+    if (ast_get_node_type(s, a) == "bitwise_not") {
+        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+        instr = ir_instruction(s, "bitwise_not")
+        ir_instruction_set_attr(s, instr, "x", x)
+        return ir_instruction_get_variable(s, instr)
+    }
+    if (ast_get_node_type(s, a) == "negate") {
+        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+        instr = ir_instruction(s, "negate")
+        ir_instruction_set_attr(s, instr, "x", x)
+        return ir_instruction_get_variable(s, instr)
+    }
+    if (ast_get_node_type(s, a) == "not") {
+        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+        instr = ir_instruction(s, "logical_not")
+        ir_instruction_set_attr(s, instr, "x", x)
+        return ir_instruction_get_variable(s, instr)
+    }
 }
 
 function ir_init(s) {
@@ -271,6 +351,7 @@ function ir_function(s, name) {
     s["ir", "num_functions"]++
     s[ir_curr_function(s), "name"] = name
     s[ir_curr_function(s), "num_blocks"] = 0
+    s[ir_curr_function(s), "num_variables"] = 0
 }
 
 function ir_block(s) {
@@ -278,43 +359,91 @@ function ir_block(s) {
     s[ir_curr_block(s), "num_instructions"] = 0
 }
 
-function ir_instruction_return(s, value) {
+function ir_instruction_void(s, type) {
     s[ir_curr_block(s), "num_instructions"]++
-    s[ir_curr_instruction(s), "type"] = "return"
-    s[ir_curr_instruction(s), "value"] = value
+    s[ir_curr_instruction(s), "type"] = type
+    s[ir_curr_instruction(s), "variable"] = ""
+    return ir_curr_instruction(s)
+}
+
+function ir_instruction(s, type) {
+    s[ir_curr_block(s), "num_instructions"]++
+    s[ir_curr_instruction(s), "type"] = type
+    s[ir_curr_function(s), "num_variables"]++
+    s[ir_curr_instruction(s), "variable"] = "$" s[ir_curr_function(s), "num_variables"]
+    return ir_curr_instruction(s)
+}
+
+function ir_instruction_set_attr(s, instr, key, value) {
+    s[instr, key] = value
+    list_append(s, instr "@attrs", key)
+}
+
+function ir_instruction_get_variable(s, instr, key, value) {
+    return s[ir_curr_instruction(s), "variable"]
 }
 
 function ir_print(s,    i, j, k) {
     for (i = 1; i <= s["ir", "num_functions"]; i++) {
-        printf("function %s\n", s["ir", "functions", i, "name"])
+        printf "%s() {\n", s["ir", "functions", i, "name"]
         for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
-            printf("  block %d\n", j)
+            printf "  %s.%d:\n", s["ir", "functions", i, "name"], j
             for (k = 1; k <= s["ir", "functions", i, "blocks", j, "num_instructions"]; k++) {
-                printf("    ")
+                printf "    "
                 ir_print_instruction(s, i, j, k)
             }
         }
+        printf "}\n"
     }
 }
 
-function ir_print_instruction(s, i, j, k) {
-    printf("return %s\n", s["ir", "functions", i, "blocks", j, "instructions", k, "value"])
+function ir_print_instruction(s, i, j, k,    instr, attrs) {
+    instr = "ir@functions@" i "@blocks@" j "@instructions@" k
+    if (s[instr, "variable"]) {
+        printf "%s <- ", s[instr, "variable"]
+    }
+    printf "%s", s[instr, "type"]
+    list_get(s, instr "@attrs", attrs)
+    for (i in attrs) {
+        printf " %s=%s", attrs[i], s[instr, attrs[i]]
+    }
+    printf "\n"
 }
 
-function codegen(s,     i, j, k) {
+function codegen(s,     i) {
     for (i = 1; i <= s["ir", "num_functions"]; i++) {
-        printf(".globl %s\n", s["ir", "functions", i, "name"])
-        printf("%s:\n", s["ir", "functions", i, "name"])
-        for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
-            printf("%s.%d:\n", s["ir", "functions", i, "name"], j)
-            for (k = 1; k <= s["ir", "functions", i, "blocks", j, "num_instructions"]; k++) {
-                codegen_instruction(s, i, j, k)
-            }
+        codegen_function(s, i)
+    }
+}
+
+function codegen_function(s, i,     j, k) {
+    printf(".globl %s\n", s["ir", "functions", i, "name"])
+    printf("%s:\n", s["ir", "functions", i, "name"])
+    for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
+        printf("%s.%d:\n", s["ir", "functions", i, "name"], j)
+        for (k = 1; k <= s["ir", "functions", i, "blocks", j, "num_instructions"]; k++) {
+            codegen_instruction(s, "ir@functions@" i "@blocks@" j "@instructions@" k)
         }
     }
 }
 
-function codegen_instruction(s, i, j, k) {
-    printf("li a0, %d\n", s["ir", "functions", i, "blocks", j, "instructions", k, "value"])
-    printf("ret\n")
+function codegen_get_register(s, variable) {
+    return "a0"
+}
+
+function codegen_instruction(s, instr) {
+    if (s[instr, "type"] == "return") {
+        printf("add a0, %s, x0\n", codegen_get_register(s, s[instr, "x"]))
+        printf("ret\n")
+    } else if (s[instr, "type"] == "constant") {
+        printf("li %s, %d\n", codegen_get_register(s, s[instr, "variable"]), s[instr, "c"])
+    } else if (s[instr, "type"] == "negate") {
+        printf("neg %s, %s\n", codegen_get_register(s, s[instr, "variable"]), codegen_get_register(s, s[instr, "x"]))
+    } else if (s[instr, "type"] == "logical_not") {
+        printf("seqz %s, %s\n", codegen_get_register(s, s[instr, "variable"]), codegen_get_register(s, s[instr, "x"]))
+    } else if (s[instr, "type"] == "bitwise_not") {
+        printf("not %s, %s\n", codegen_get_register(s, s[instr, "variable"]), codegen_get_register(s, s[instr, "x"]))
+    } else {
+        parser_error(s, sprintf("UNKNOWN INSTRUCTION %s", s[instr, "type"]))
+    }
 }
