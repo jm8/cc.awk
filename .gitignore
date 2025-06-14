@@ -1,5 +1,3 @@
 awkprof.out
-test.c
-a.out
-out.s
-test.s
+*.out
+*.s

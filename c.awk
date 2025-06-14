@@ -25,9 +25,9 @@ BEGIN {
     close(INPUT_FILE)
 
     parse(S)
-    # ast_print(S)
+    if (0) ast_print(S)
     lower(S)
-    # ir_print(S)
+    if (0) ir_print(S)
 
     codegen(S)
 }
@@ -114,8 +114,10 @@ function lex(s, source,   line, col, i, token_index, symbol, found)
             continue
         }
 
-        printf "Warning: Skipping unrecognized character at %s:%d:%d\n", INPUT_FILE, line, col
-        source = substr(source, 2)
+        printf "%s:%d:%d: Unrecognized character\n", INPUT_FILE, line, col > "/dev/stderr"
+        close(INPUT_FILE)
+        close("/dev/stderr")
+        exit 1
     }
     s["tokens", token_index, "type"] = "eof"
     s["tokens", token_index, "value"] = ""
@@ -181,7 +183,8 @@ function parser_advance(s,    value) {
 }
 
 function parser_error(s, error_message) {
-    printf("%s:%d:%d: %s\n", s["input_file"], s["tokens", s["parser_state", "token_index"], "line"], s["tokens", s["parser_state", "token_index"], "col"], error_message)
+    printf("%s:%d:%d: %s\n", s["input_file"], s["tokens", s["parser_state", "token_index"], "line"], s["tokens", s["parser_state", "token_index"], "col"], error_message) > "/dev/stderr"
+    close("/dev/stderr")
     exit 1
 }
 
