@@ -17,17 +17,21 @@ BEGIN {
         SOURCE = SOURCE LINE "\n"
     }
 
+    S["input_file"] = INPUT_FILE
     lex(S, SOURCE)
     for (I = 1; I <= S["num_tokens"]; I++) {
         print S["tokens", I, "type"], S["tokens", I, "value"]
     }
-    S["input_file"] = INPUT_FILE
+    printf("\n")
     close(INPUT_FILE)
 
     parse(S)
-    print_ast(S)
+    ast_print(S)
+    printf("\n")
+    lower(S)
+    ir_print(S)
+    printf("\n")
 }
-
 
 function lex(s, source,   line, col, i, token_index, symbol, found)
 {
@@ -109,38 +113,38 @@ function parse(s,      a) {
     s["parser_state", "token_index"] = 1
     s["parser_state", "ast_index"] = 1
 
-    a= start_node(s, "program")
+    a= ast_start_node(s, "program")
     parse_function_decl(s)
-    end_node(s, a)
+    ast_end_node(s, a)
     return a
 }
 
 function parse_function_decl(s,     a) {
-    a = start_node(s, "function_decl")
+    a = ast_start_node(s, "function_decl")
     parser_expect(s, "int")
-    set_node_attr(s, a, "name", parser_expect(s, "id"))
+    ast_set_node_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, "(")
     parser_expect(s, ")")
     parser_expect(s, "{")
-    set_node_attr(s, a, "body", parse_statment(s))
+    ast_set_node_attr(s, a, "body", parse_statment(s))
     parser_expect(s, "}")
-    end_node(s, a)
+    ast_end_node(s, a)
     return a
 }
 
 function parse_statment(s,     a) {
-    a = start_node(s, "return")
+    a = ast_start_node(s, "return")
     parser_expect(s, "return")
-    set_node_attr(s, a, "expr", parse_expr(s))
+    ast_set_node_attr(s, a, "expr", parse_expr(s))
     parser_expect(s, ";")
-    end_node(s, a)
+    ast_end_node(s, a)
     return a
 }
 
 function parse_expr(s,     a) {
-    a = start_node(s, "int")
-    set_node_attr(s, a, "value", parser_expect(s, "int"))
-    end_node(s, a)
+    a = ast_start_node(s, "int")
+    ast_set_node_attr(s, a, "value", parser_expect(s, "int"))
+    ast_end_node(s, a)
     return a
 }
 
@@ -166,35 +170,33 @@ function parser_error(s, error_message) {
     exit 1
 }
 
-function start_node(s, node_type,       ast_index) {
+function ast_start_node(s, node_type,       ast_index) {
     s["ast", s["parser_state", "ast_index"], "type"] = node_type
     s["ast", s["parser_state", "ast_index"], "line"] = s["tokens", s["parser_state", "token_index"], "line"]
     s["ast", s["parser_state", "ast_index"], "col"] = s["tokens", s["parser_state", "token_index"], "col"]
-    s["ast", s["parser_state", "ast_index"], "attrs"] = ""
     ast_index = s["parser_state", "ast_index"]
     s["parser_state", "ast_index"]++
     return ast_index
 }
 
-function end_node(s, ast_index) {
+function ast_end_node(s, ast_index) {
     s["ast", ast_index, "end"] = s["parser_state", "ast_index"] - 1
 }
 
-function set_node_attr(s, ast_index, key, value) {
-    s["ast", ast_index, key] = value
-    if (s["ast", ast_index, "attrs"]) {
-        s["ast", ast_index, "attrs"] = s["ast", ast_index, "attrs"] ":" key
-    } else {
-        s["ast", ast_index, "attrs"] = key
-    }
-
+function ast_get_node_end(s, ast_index) {
+    return s["ast", ast_index, "end"]
 }
 
-function get_node_attr(s, ast_index, key) {
+function ast_set_node_attr(s, ast_index, key, value) {
+    s["ast", ast_index, key] = value
+    list_append(s, "ast@" ast_index "@attrs", key)
+}
+
+function ast_get_node_attr(s, ast_index, key) {
     return s["ast", ast_index, key]
 }
 
-function print_ast(s) {
+function ast_print(s) {
     print_ast_inner(s, 1, 0)
 }
 
@@ -203,19 +205,96 @@ function print_ast_inner(s, ast_index, indent,    curr, end, i, attrs) {
         printf " "
     }
     printf "%s", s["ast", ast_index, "type"]
-    split(s["ast", ast_index, "attrs"], attrs, ":")
+    list_get(s, "ast@" ast_index "@attrs", attrs)
     for (i in attrs) {
-        printf " %s=%s", attrs[i], get_node_attr(s, ast_index, attrs[i])
+        printf " %s=%s", attrs[i], ast_get_node_attr(s, ast_index, attrs[i])
     }
     printf "\n"
-    end = s["ast", ast_index, "end"]
-    if (!end) {
-        print "Forgot to end this node"
-        exit 1
-    }
+    end = ast_get_node_end(s, ast_index)
     curr = ast_index + 1
     while (curr <= end) {
         curr = print_ast_inner(s, curr, indent + 2) + 1
     }
     return end
+}
+
+function lower(s) {
+    ir_init(s)
+    lower_function(s, 2)
+}
+
+function lower_function(s, ast_index) {
+    ir_function(s, ast_get_node_attr(s, ast_index, "name"))
+    ir_block(s)
+    lower_statement(s, ast_index+1)
+}
+
+function lower_statement(s, ast_index) {
+    ir_instruction_return(s, ast_get_node_attr(s, ast_get_node_attr(s, ast_index, "expr"), "value"))
+}
+
+function ir_init(s) {
+    s["ir", "num_functions"] = 0
+}
+
+function ir_curr_function(s) {
+    return "ir@functions@" s["ir", "num_functions"]
+}
+
+function ir_curr_block(s) {
+    return ir_curr_function(s) "@blocks@" s[ir_curr_function(s), "num_blocks"]
+}
+
+function ir_curr_instruction(s) {
+    return ir_curr_block(s) "@instructions@" s[ir_curr_block(s), "num_instructions"]
+}
+
+function ir_function(s, name) {
+    s["ir", "num_functions"]++
+    s[ir_curr_function(s), "name"] = name
+    s[ir_curr_function(s), "num_blocks"] = 0
+}
+
+function ir_block(s) {
+    s[ir_curr_function(s), "num_blocks"]++
+    s[ir_curr_block(s), "num_instructions"] = 0
+}
+
+function ir_instruction_return(s, value) {
+    s[ir_curr_block(s), "num_instructions"]++
+    s[ir_curr_instruction(s), "type"] = "return"
+    s[ir_curr_instruction(s), "value"] = value
+}
+
+function ir_print(s,    i, j, k) {
+    for (i = 1; i <= s["ir", "num_functions"]; i++) {
+        printf("function %s\n", s["ir", "functions", i, "name"])
+        for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
+            printf("  block %d\n", j)
+            for (k = 1; k <= s["ir", "functions", i, "blocks", j, "num_instructions"]; k++) {
+                printf("    ")
+                ir_print_instruction(s, i, j, k)
+            }
+        }
+    }
+}
+
+function ir_print_instruction(s, i, j, k) {
+    printf("return %s\n", s["ir", "functions", i, "blocks", j, "instructions", k, "value"])
+}
+
+function list_append(s, key, value) {
+    if (key in s && s[key]) {
+        s[key] = s[key] ":" value
+    } else {
+        s[key] = value
+    }
+}
+
+function list_get(s, key, out) {
+    if (key in s && s[key]) {
+        split(s[key], out, ":")
+    } else {
+        split("", out)
+    }
 }
