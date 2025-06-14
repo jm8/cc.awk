@@ -19,8 +19,9 @@ BEGIN {
 
     lex(S, SOURCE)
     for (I = 1; I <= S["num_tokens"]; I++) {
-        print S["tokens", I, "type"]
+        print S["tokens", I, "type"], S["tokens", I, "value"]
     }
+    S["input_file"] = INPUT_FILE
     close(INPUT_FILE)
 
     parse(S)
@@ -73,7 +74,7 @@ function lex(s, source,   line, col, i, token_index, symbol, found)
         match(source, /^[a-zA-Z][a-zA-Z0-9_]**/)
         if (RLENGTH >= 1) {
             s["tokens", token_index, "type"] = "id"
-            s["tokens", token_index, "value"] = substr(source, 1)
+            s["tokens", token_index, "value"] = substr(source, 1, RLENGTH)
             s["tokens", token_index, "line"] = line
             s["tokens", token_index, "col"] = col
             token_index++
@@ -84,7 +85,7 @@ function lex(s, source,   line, col, i, token_index, symbol, found)
 
         match(source, /^[0-9]+*/)
         if (RLENGTH >= 1) {
-            s["tokens", token_index, "type"] = symbol
+            s["tokens", token_index, "type"] = "int"
             s["tokens", token_index, "value"] = substr(source, 1, RLENGTH) + 0
             s["tokens", token_index, "line"] = line
             s["tokens", token_index, "col"] = col
@@ -97,27 +98,78 @@ function lex(s, source,   line, col, i, token_index, symbol, found)
         printf "Warning: Skipping unrecognized character at %s:%d:%d\n", INPUT_FILE, line, col
         source = substr(source, 2)
     }
-    return s["num_tokens"] = token_index - 1
+    s["tokens", token_index, "type"] = "eof"
+    s["tokens", token_index, "value"] = ""
+    s["tokens", token_index, "line"] = line
+    s["tokens", token_index, "col"] = col
+    s["num_tokens"] = token_index
 }
 
-function parse(s) {
+function parse(s,      program) {
     s["parser_state", "token_index"] = 1
     s["parser_state", "ast_index"] = 1
 
     program = start_node(s, "program")
-    function_decl = start_node(s, "function_decl")
-    first_statement = start_node(s, "first_statement")
-    end_node(s, first_statement)
-    second_statement = start_node(s, "second_statement")
-    end_node(s, second_statement)
-    end_node(s, function_decl)
+    parse_function_decl(s)
     end_node(s, program)
+}
+
+function parse_function_decl(s,     a) {
+    a = start_node(s, "function_decl")
+    parser_expect(s, "int")
+    set_node_attr(s, a, "name", parser_expect(s, "id"))
+    parser_expect(s, "(")
+    parser_expect(s, ")")
+    parser_expect(s, "{")
+    set_node_attr(s, a, "body", parse_statment(s))
+    parser_expect(s, "}")
+    end_node(s, a)
+    return a
+}
+
+function parse_statment(s,     a) {
+    a = start_node(s, "return")
+    parser_expect(s, "return")
+    set_node_attr(s, a, "expr", parse_expr(s))
+    parser_expect(s, ";")
+    end_node(s, a)
+    return a
+}
+
+function parse_expr(s,     a) {
+    a = start_node(s, "int")
+    set_node_attr(s, a, "value", parser_expect(s, "int"))
+    end_node(s, a)
+    return a
+}
+
+function parser_expect(s, token_type,   value) {
+    if (parser_peek(s) != token_type) {
+        parser_error(s, sprintf("Expected %s, found %s", token_type, parser_peek(s)))
+    }
+    return parser_advance(s)
+}
+
+function parser_peek(s) {
+    return s["tokens", s["parser_state", "token_index"], "type"]
+}
+
+function parser_advance(s,    value) {
+    value = s["tokens", s["parser_state", "token_index"], "value"]
+    s["parser_state", "token_index"]++
+    return value
+}
+
+function parser_error(s, error_message) {
+    printf("%s:%d:%d: %s\n", s["input_file"], s["tokens", s["parser_state", "token_index"], "line"], s["tokens", s["parser_state", "token_index"], "col"], error_message)
+    exit 1
 }
 
 function start_node(s, node_type,       ast_index) {
     s["ast", s["parser_state", "ast_index"], "type"] = node_type
     s["ast", s["parser_state", "ast_index"], "line"] = s["tokens", s["parser_state", "token_index"], "line"]
     s["ast", s["parser_state", "ast_index"], "col"] = s["tokens", s["parser_state", "token_index"], "col"]
+    s["ast", s["parser_state", "ast_index"], "attrs"] = ""
     ast_index = s["parser_state", "ast_index"]
     s["parser_state", "ast_index"]++
     return ast_index
@@ -127,15 +179,34 @@ function end_node(s, ast_index) {
     s["ast", ast_index, "end"] = s["parser_state", "ast_index"] - 1
 }
 
+function set_node_attr(s, ast_index, key, value) {
+    s["ast", ast_index, key] = value
+    if (s["ast", ast_index, "attrs"]) {
+        s["ast", ast_index, "attrs"] = s["ast", ast_index, "attrs"] ":" key
+    } else {
+        s["ast", ast_index, "attrs"] = key
+    }
+
+}
+
+function get_node_attr(s, ast_index, key) {
+    return s["ast", ast_index, key]
+}
+
 function print_ast(s) {
     print_ast_inner(s, 1, 0)
 }
 
-function print_ast_inner(s, ast_index, indent,    curr, end, i) {
+function print_ast_inner(s, ast_index, indent,    curr, end, i, attrs) {
     for (i = 0; i < indent; i++) {
         printf " "
     }
-    print s["ast", ast_index, "type"]
+    printf "%s", s["ast", ast_index, "type"]
+    split(s["ast", ast_index, "attrs"], attrs, ":")
+    for (i in attrs) {
+        printf " %s=%s", attrs[i], get_node_attr(s, ast_index, attrs[i])
+    }
+    printf "\n"
     end = s["ast", ast_index, "end"]
     if (!end) {
         print "Forgot to end this node"
