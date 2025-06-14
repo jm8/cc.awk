@@ -19,18 +19,33 @@ BEGIN {
 
     S["input_file"] = INPUT_FILE
     lex(S, SOURCE)
-    for (I = 1; I <= S["num_tokens"]; I++) {
-        print S["tokens", I, "type"], S["tokens", I, "value"]
-    }
-    printf("\n")
+    # for (I = 1; I <= S["num_tokens"]; I++) {
+    #     print S["tokens", I, "type"], S["tokens", I, "value"]
+    # }
     close(INPUT_FILE)
 
     parse(S)
-    ast_print(S)
-    printf("\n")
+    # ast_print(S)
     lower(S)
-    ir_print(S)
-    printf("\n")
+    # ir_print(S)
+
+    codegen(S)
+}
+
+function list_append(s, key, value) {
+    if (key in s && s[key]) {
+        s[key] = s[key] ":" value
+    } else {
+        s[key] = value
+    }
+}
+
+function list_get(s, key, out) {
+    if (key in s && s[key]) {
+        split(s[key], out, ":")
+    } else {
+        split("", out)
+    }
 }
 
 function lex(s, source,   line, col, i, token_index, symbol, found)
@@ -283,18 +298,20 @@ function ir_print_instruction(s, i, j, k) {
     printf("return %s\n", s["ir", "functions", i, "blocks", j, "instructions", k, "value"])
 }
 
-function list_append(s, key, value) {
-    if (key in s && s[key]) {
-        s[key] = s[key] ":" value
-    } else {
-        s[key] = value
+function codegen(s,     i, j, k) {
+    for (i = 1; i <= s["ir", "num_functions"]; i++) {
+        printf(".globl %s\n", s["ir", "functions", i, "name"])
+        printf("%s:\n", s["ir", "functions", i, "name"])
+        for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
+            printf("%s.%d:\n", s["ir", "functions", i, "name"], j)
+            for (k = 1; k <= s["ir", "functions", i, "blocks", j, "num_instructions"]; k++) {
+                codegen_instruction(s, i, j, k)
+            }
+        }
     }
 }
 
-function list_get(s, key, out) {
-    if (key in s && s[key]) {
-        split(s[key], out, ":")
-    } else {
-        split("", out)
-    }
+function codegen_instruction(s, i, j, k) {
+    printf("li a0, %d\n", s["ir", "functions", i, "blocks", j, "instructions", k, "value"])
+    printf("ret\n")
 }
