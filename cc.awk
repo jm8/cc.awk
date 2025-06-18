@@ -1,8 +1,8 @@
-#!/usr/bin/env -S awk --traditional --lint --exec
+#!/usr/bin/env -S awk --posix --lint --exec
 BEGIN {
     SUBSEP = "@"
     if (ARGC != 2) {
-        print "Usage: c.awk program.c"
+        print "Usage: cc.awk program.c"
         exit 1
     }
     for (ARGNO = 1; ARGNO < ARGC; ARGNO++) {
@@ -433,7 +433,9 @@ function codegen_get_register(s, variable) {
 
 function codegen_instruction(s, instr) {
     if (s[instr, "type"] == "return") {
-        printf("add a0, %s, x0\n", codegen_get_register(s, s[instr, "x"]))
+        if (codegen_get_register(s, s[instr, "x"]) != "a0") {
+            printf("add a0, %s, x0\n", codegen_get_register(s, s[instr, "x"]))
+        }
         printf("ret\n")
     } else if (s[instr, "type"] == "constant") {
         printf("li %s, %d\n", codegen_get_register(s, s[instr, "variable"]), s[instr, "c"])
