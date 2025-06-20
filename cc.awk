@@ -680,11 +680,183 @@ function lower_expr(s, a, block,    l, x, variable_name, lhs, rhs) {
     fatal(sprintf("node %d has type '%s', expected an expression", a, tree_get_type(s, a)))
 }
 
+function find_usage(s, funct, out,    k, i, j, block, instr, variable, found_first_use, found_last_use) {
+    k = 1
+    out["first_use_count"] = 0
+    out["last_use_count"] = 0
+
+    for (i = 1; i <= tree_count_items(s, funct); i++) {
+        block = tree_get_item(s, funct, i)
+
+        for (j = 1; j <= tree_count_items(s, block); j++) {
+            instr = tree_get_item(s, block, j)
+
+            if (tree_has_attr(s, instr, "variable")) {
+                variable = ir_get_variable(s, instr)
+
+                if (!("first_uses_map" "@" variable in out)) {
+                    printf("first use of %s at %d\n", variable, k)
+                    out["first_use_count"]++
+                    out["first_uses_map", variable] = k
+                    out["first_uses_list", out["first_use_count"], "variable"] = variable
+                    out["first_uses_list", out["first_use_count"], "location"] = k
+                }
+            }
+
+            if (tree_has_attr(s, instr, "operand1")) {
+                variable = ir_get_operand1(s, instr)
+
+                if (!("first_uses_map" "@" variable in out)) {
+                    printf("first use of %s at %d\n", variable, k)
+                    out["first_use_count"]++
+                    out["first_uses_map", variable] = k
+                    out["first_uses_list", out["first_use_count"], "variable"] = variable
+                    out["first_uses_list", out["first_use_count"], "location"] = k
+                }
+            }
+
+            if (tree_has_attr(s, instr, "operand2")) {
+                variable = ir_get_operand2(s, instr)
+
+                if (!("first_uses_map" "@" variable in out)) {
+                    printf("first use of %s at %d\n", variable, k)
+                    out["first_use_count"]++
+                    out["first_uses_map", variable] = k
+                    out["first_uses_list", out["first_use_count"], "variable"] = variable
+                    out["first_uses_list", out["first_use_count"], "location"] = k
+                }
+            }
+
+            k++
+        }
+    }
+
+    k--
+
+    for (i = tree_count_items(s, funct); i >= 1; i--) {
+        block = tree_get_item(s, funct, i)
+
+        for (j = tree_count_items(s, block); j >= 1; j--) {
+            instr = tree_get_item(s, block, j)
+
+            if (tree_has_attr(s, instr, "variable")) {
+                variable = ir_get_variable(s, instr)
+
+                if (!("last_uses_map" "@" variable in out)) {
+                    printf("last use of %s at %d\n", variable, k)
+                    out["last_use_count"]++
+                    out["last_uses_map", variable] = k
+                    out["last_uses_list", out["last_use_count"], "variable"] = variable
+                    out["last_uses_list", out["last_use_count"], "location"] = k
+                }
+            }
+
+            if (tree_has_attr(s, instr, "operand1")) {
+                variable = ir_get_operand1(s, instr)
+
+                if (!("last_uses_map" "@" variable in out)) {
+                    printf("last use of %s at %d\n", variable, k)
+                    out["last_use_count"]++
+                    out["last_uses_map", variable] = k
+                    out["last_uses_list", out["last_use_count"], "variable"] = variable
+                    out["last_uses_list", out["last_use_count"], "location"] = k
+                }
+            }
+
+            if (tree_has_attr(s, instr, "operand2")) {
+                variable = ir_get_operand2(s, instr)
+
+                if (!("last_uses_map" "@" variable in out)) {
+                    printf("last use of %s at %d\n", variable, k)
+                    out["last_use_count"]++
+                    out["last_uses_map", variable] = k
+                    out["last_uses_list", out["last_use_count"], "variable"] = variable
+                    out["last_uses_list", out["last_use_count"], "location"] = k
+                }
+            }
+
+            k--
+        }
+    }
+}
+
+function add_to_active(active, end, register,    curr) {
+    if (active["head"] == -1) {
+        active["head"] = register
+        active[register, "end"] = end
+        active[register, "next"] = -1
+    }
+    else {
+        curr = active["head"]
+
+        while (active[curr, "next"] != -1 && active[active[curr, "next"], "end"] < end) {
+            curr = active[curr, "next"]
+        }
+
+        active[register, "end"] = end
+        active[register, "next"] = active[curr, "next"]
+        active[curr, "next"] = register
+    }
+
+    printf("Active\n")
+    curr = active["head"]
+
+    while (curr != -1) {
+        print curr, "end = " active[curr, "end"]
+        curr = active[curr, "next"]
+    }
+}
+
+function expire_old_intervals(free_registers, active, expiry_point,    curr) {
+    curr = active["head"]
+
+    while (curr != -1 && active[curr, "end"] < expiry_point) {
+        active["head"] = active[curr, "next"]
+        free_registers["count"]++
+        free_registers[free_registers["count"]] = curr
+        curr = active["head"]
+    }
+}
+
+function linear_scan_register_allocation(s, funct, registers,    free_registers, usage, active, i) {
+    print "/*"
+    find_usage(s, funct, usage)
+
+    for (i = 1; i <= 11; i++) {
+        free_registers[i] = "s" (12 - i)
+    }
+
+    free_registers["count"] = 11
+
+    active["count"] = 0
+    active["head"] = -1
+
+    for (i = 1; i <= usage["first_use_count"]; i++) {
+        expire_old_intervals(free_registers, active, usage["first_uses_list", i, "location"])
+
+        if (active["count"] == 11) {
+            fatal("Spill")
+        }
+        else {
+            registers[usage["first_uses_list", i, "variable"]] = free_registers[free_registers["count"]]
+            add_to_active(\
+                active,
+                usage["last_uses_map", usage["first_uses_list", i, "variable"]],
+                free_registers[free_registers["count"]]\
+            )
+            free_registers["count"]--
+        }
+    }
+
+    print "*/"
+}
+
 function codegen(s, ir_root) {
     codegen_function(s, ir_root)
 }
 
-function codegen_function(s, l,    func_name, i, block, j) {
+function codegen_function(s, l,    func_name, i, block, j, registers) {
+    linear_scan_register_allocation(s, l, registers)
     func_name = tree_get_attr(s, l, "name")
     printf(".globl %s\n", func_name)
     printf("%s:\n", func_name)
@@ -694,55 +866,47 @@ function codegen_function(s, l,    func_name, i, block, j) {
         block = tree_get_item(s, l, i)
 
         for (j = 1; j <= tree_count_items(s, block); j++) {
-            codegen_instruction(s, tree_get_item(s, block, j))
+            codegen_instruction(s, tree_get_item(s, block, j), registers)
         }
     }
 }
 
-function codegen_get_register(s, variable) {
-    return "a0"
-}
-
-function codegen_instruction(s, l,    type) {
+function codegen_instruction(s, l, registers,    type, dest, src1, src2) {
     type = tree_get_type(s, l)
 
+    if (tree_has_attr(s, l, "variable")) {
+        dest = registers[ir_get_variable(s, l)]
+    }
+
+    if (tree_has_attr(s, l, "operand1")) {
+        src1 = registers[ir_get_operand1(s, l)]
+    }
+
+    if (tree_has_attr(s, l, "operand2")) {
+        src2 = registers[ir_get_operand2(s, l)]
+    }
+
     if (type == "return") {
-        if (codegen_get_register(s, ir_get_operand1(s, l)) != "a0") {
-            printf("add a0, %s, x0\n", codegen_get_register(s, ir_get_operand1(s, l)))
+        if (src1 != "a0") {
+            printf("add a0, %s, x0\n", src1)
         }
 
         printf("ret\n")
     }
     else if (type == "constant") {
-        printf("li %s, %d\n", codegen_get_register(s, ir_get_variable(s, l)), tree_get_attr(s, l, "value"))
+        printf("li %s, %d\n", dest, tree_get_attr(s, l, "value"))
     }
     else if (type == "negate") {
-        printf(\
-            "neg %s, %s\n",
-            codegen_get_register(s, ir_get_variable(s, l)),
-            codegen_get_register(s, ir_get_operand1(s, l))\
-        )
+        printf("neg %s, %s\n", dest, src1)
     }
     else if (type == "logical_not") {
-        printf(\
-            "seqz %s, %s\n",
-            codegen_get_register(s, ir_get_variable(s, l)),
-            codegen_get_register(s, ir_get_operand1(s, l))\
-        )
+        printf("seqz %s, %s\n", dest, src1)
     }
     else if (type == "bitwise_not") {
-        printf(\
-            "not %s, %s\n",
-            codegen_get_register(s, ir_get_variable(s, l)),
-            codegen_get_register(s, ir_get_operand1(s, l))\
-        )
+        printf("not %s, %s\n", dest, src1)
     }
     else if (type == "mov") {
-        printf(\
-            "add %s, %s, x0\n",
-            codegen_get_register(s, ir_get_variable(s, l)),
-            codegen_get_register(s, ir_get_operand1(s, l))\
-        )
+        printf("add %s, %s, x0\n", dest, src1)
     }
     else {
         fatal(sprintf("can't codegen unknown instruction '%s'", type))

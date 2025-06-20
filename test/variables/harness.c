@@ -2,4 +2,4 @@
 
 int func();
 
-int main() { ASSERT_EQ(func(), -~(!0)); }
+int main() { ASSERT_EQ(func(), 1); }
