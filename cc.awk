@@ -30,19 +30,19 @@ BEGIN {
     # printf("*/\n")
     close(INPUT_FILE)
 
-    parse(S)
+    AST_ROOT = parse(S)
 
     print "/*"
-    tree_print(S, "ast", 1)
+    tree_print(S, AST_ROOT)
     print "*/\n"
 
-    lower(S)
+    IR = lower(S, AST_ROOT)
 
     print "/*"
-    ir_print(S)
+    tree_print(S, IR)
     print "*/\n"
 
-    codegen(S)
+    codegen(S, IR)
 }
 
 function fatal(string) {
@@ -69,12 +69,11 @@ function list_get(s, key, out,    i) {
     }
 }
 
-function list_length(s, key,    temp, count) {
-    temp = s[key]
-    count = gsub(/:/, "", temp)
-    return count
-}
-
+# function list_length(s, key,    temp, count) {
+#     temp = s[key]
+#     count = gsub(/:/, "", temp)
+#     return count
+# }
 function list_contains(s, key, needle,    items, i) {
     list_get(s, key, items)
 
@@ -87,118 +86,171 @@ function list_contains(s, key, needle,    items, i) {
     return 0
 }
 
-function tree_create_node(s, tree_name, type) {
-    if (!(tree_name "@" "node_count" in s)) {
-        s[tree_name, "node_count"] = 0
+function tree_create_node(s, type) {
+    if (!("tree" "@" "node_count" in s)) {
+        s["tree", "node_count"] = 0
     }
 
-    s[tree_name, "node_count"]++
-    s[tree_name, s[tree_name, "node_count"], "type"] = type
-    return s[tree_name, "node_count"]
+    s["tree", "node_count"]++
+    s["tree", s["tree", "node_count"], "type"] = type
+    return s["tree", "node_count"]
 }
 
-function tree_get_type(s, tree_name, node) {
-    return s[tree_name, node, "type"]
+function tree_get_type(s, node) {
+    return s["tree", node, "type"]
 }
 
-function tree_has_attr(s, tree_name, node, attr) {
-    return list_contains(s, tree_name "@" node "@" "attrs", attr)
-}
-
-function tree_set_attr(s, tree_name, node, attr, value) {
-    s[tree_name, node, "attrs", attr] = value
-
-    if (!tree_has_attr(s, tree_name, node, attr)) {
-        list_append(s, tree_name "@" node "@" "attrs", attr)
-    }
-}
-
-function tree_get_attr(s, tree_name, node, attr) {
-    if (!tree_has_attr(s, tree_name, node, attr)) {
+function tree_assert_type(s, node, type) {
+    if (tree_get_type(s, node) != type) {
         fatal(\
             sprintf(\
-                "Node %d is missing attr %s (has '%s')",
+                "node %d, has type '%s', expected '%s'",
                 node,
-                attr,
-                s[tree_name, node, "attrs"]\
+                tree_get_type(s, node),
+                type\
             )\
         )
     }
-
-    return s[tree_name, node, "attrs", attr]
 }
 
-function tree_list_attrs(s, tree_name, node, out) {
-    list_get(s, tree_name "@" node "@" "attrs", out)
+function tree_has_attr(s, node, attr) {
+    return list_contains(s, "@" node "@" "attrs", attr)
 }
 
-function tree_has_child(s, tree_name, node, child_name) {
-    return list_contains(s, tree_name "@" node "@" "children", child_name)
-}
+function tree_set_attr(s, node, attr, value) {
+    s["tree", node, "attrs", attr] = value
 
-function tree_set_child(s, tree_name, node, child_name, value) {
-    s[tree_name, node, "children", child_name] = value
-
-    if (!tree_has_child(s, tree_name, node, child_name)) {
-        list_append(s, tree_name "@" node "@" "children", child_name)
+    if (!tree_has_attr(s, node, attr)) {
+        list_append(s, "@" node "@" "attrs", attr)
     }
 }
 
-function tree_get_child(s, tree_name, node, child_name) {
-    if (!tree_has_child(s, tree_name, node, child_name)) {
-        fatal(\
-            sprintf(\
-                "Node %d is missing child %s (has '%s')",
-                node,
-                child_name,
-                s[tree_name, node, "children"]\
-            )\
-        )
+function tree_get_attr(s, node, attr) {
+    if (!tree_has_attr(s, node, attr)) {
+        if (tree_has_child(s, node, attr)) {
+            fatal(\
+                sprintf(\
+                    "node %d is missing attr '%s', but it has a child with the same name",
+                    node,
+                    attr\
+                )\
+            )
+        }
+
+        if ("tree" "@" node "@" "attrs" in s) {
+            fatal(\
+                sprintf(\
+                    "node %d is missing attr '%s' (has '%s')",
+                    node,
+                    attr,
+                    s["tree", node, "attrs"]\
+                )\
+            )
+        }
+        else {
+            fatal(\
+                sprintf(\
+                    "node %d is missing attr '%s' (has no attrs)", node, attr\
+                )\
+            )
+        }
     }
 
-    return s[tree_name, node, "children", child_name]
+    return s["tree", node, "attrs", attr]
 }
 
-function tree_list_children(s, tree_name, node, out) {
-    list_get(s, tree_name "@" node "@" "children", out)
+function tree_list_attrs(s, node, out) {
+    list_get(s, "@" node "@" "attrs", out)
 }
 
-function tree_add_item(s, tree_name, node, value) {
-    if (!(tree_name "@" node "@" "count_items" in s)) {
-        s[tree_name, node, "count_items"] = 1
+function tree_has_child(s, node, child_name) {
+    return list_contains(s, "@" node "@" "children", child_name)
+}
+
+function tree_set_child(s, node, child_name, value) {
+    s["tree", node, "children", child_name] = value
+
+    if (!tree_has_child(s, node, child_name)) {
+        list_append(s, "@" node "@" "children", child_name)
+    }
+}
+
+function tree_get_child(s, node, child_name) {
+    if (!tree_has_child(s, node, child_name)) {
+        if (tree_has_attr(s, node, child_name)) {
+            fatal(\
+                sprintf(\
+                    "node %d is missing child '%s', but it has an attr with the same name",
+                    node,
+                    child_name\
+                )\
+            )
+        }
+
+        if ("tree" "@" node "@" "children" in s) {
+            fatal(\
+                sprintf(\
+                    "node %d is missing child '%s' (has '%s')",
+                    node,
+                    child_name,
+                    s["tree", node, "children"]\
+                )\
+            )
+        }
+        else {
+            fatal(\
+                sprintf(\
+                    "node %d is missing child '%s' (has no children)",
+                    node,
+                    child_name\
+                )\
+            )
+        }
+    }
+
+    return s["tree", node, "children", child_name]
+}
+
+function tree_list_children(s, node, out) {
+    list_get(s, "@" node "@" "children", out)
+}
+
+function tree_add_item(s, node, value) {
+    if (!("tree" "@" node "@" "count_items" in s)) {
+        s["tree", node, "count_items"] = 1
     }
     else {
-        s[tree_name, node, "count_items"]++
+        s["tree", node, "count_items"]++
     }
 
-    s[tree_name, node, "items", s[tree_name, node, "count_items"]] = value
+    s["tree", node, "items", s["tree", node, "count_items"]] = value
 }
 
-function tree_get_item(s, tree_name, node, i) {
-    if (i > tree_count_items(s, tree_name, node)) {
+function tree_get_item(s, node, i) {
+    if (i > tree_count_items(s, node)) {
         fatal(\
             sprintf(\
-                "Node %d is missing item %d (has '%d')",
+                "node %d is missing item '%d' (has %d items)",
                 node,
                 i,
-                tree_count_items(s, tree_name, node)\
+                tree_count_items(s, node)\
             )\
         )
     }
 
-    return s[tree_name, node, "items", i]
+    return s["tree", node, "items", i]
 }
 
-function tree_count_items(s, tree_name, node) {
-    if (!(tree_name "@" node "@" "count_items" in s)) {
+function tree_count_items(s, node) {
+    if (!("tree" "@" node "@" "count_items" in s)) {
         return 0
     }
 
-    return s[tree_name, node, "count_items"]
+    return s["tree", node, "count_items"]
 }
 
-function tree_print(s, tree_name, node) {
-    tree_print_inner(s, tree_name, node, 0)
+function tree_print(s, node) {
+    tree_print_inner(s, node, 0)
 }
 
 function print_indent(indent,    i) {
@@ -207,40 +259,32 @@ function print_indent(indent,    i) {
     }
 }
 
-function tree_print_inner(s, tree_name, node, indent,    i, j, attrs, children, count_items) {
+function tree_print_inner(s, node, indent,    i, j, attrs, children, count_items) {
     print_indent(indent)
-    printf("type: %s\n", tree_get_type(s, tree_name, node))
+    printf("%s(%d)", tree_get_type(s, node), node)
 
-    tree_list_attrs(s, tree_name, node, attrs)
+    tree_list_attrs(s, node, attrs)
 
     for (i in attrs) {
-        print_indent(indent)
-        printf(\
-            "%s: %s\n", attrs[i], tree_get_attr(s, tree_name, node, attrs[i])\
-        )
+        printf(" %s=%s", attrs[i], tree_get_attr(s, node, attrs[i]))
     }
 
-    tree_list_children(s, tree_name, node, children)
+    printf("\n")
+
+    tree_list_children(s, node, children)
 
     for (i in children) {
         print_indent(indent)
         printf("%s:\n", children[i])
-        tree_print_inner(\
-            s,
-            tree_name,
-            tree_get_child(s, tree_name, node, children[i]),
-            indent + 2\
-        )
+        tree_print_inner(s, tree_get_child(s, node, children[i]), indent + 2)
     }
 
-    count_items = tree_count_items(s, tree_name, node)
+    count_items = tree_count_items(s, node)
 
     for (i = 1; i <= count_items; i++) {
         print_indent(indent)
         printf("%d:\n", i)
-        tree_print_inner(\
-            s, tree_name, tree_get_item(s, tree_name, node, i), indent + 2\
-        )
+        tree_print_inner(s, tree_get_item(s, node, i), indent + 2)
     }
 }
 
@@ -345,78 +389,33 @@ function lex(s, source,    line, col, i, token_index, symbol, found, symbols) {
     s["num_tokens"] = token_index
 }
 
-function ast_create_node(s, type) {
-    return tree_create_node(s, "ast", type)
-}
-
-function ast_get_type(s, node) {
-    return tree_get_type(s, "ast", node)
-}
-
-function ast_has_attr(s, node, attr) {
-    return tree_has_attr(s, "ast", node, attr)
-}
-
-function ast_set_attr(s, node, attr, value) {
-    return tree_set_attr(s, "ast", node, attr, value)
-}
-
-function ast_get_attr(s, node, attr) {
-    return tree_get_attr(s, "ast", node, attr)
-}
-
-function ast_list_attrs(s, node, out) {
-    return tree_list_attrs(s, "ast", node, out)
-}
-
-function ast_has_child(s, node, child_name) {
-    return tree_has_child(s, "ast", node, child_name)
-}
-
-function ast_set_child(s, node, child_name, value) {
-    return tree_set_child(s, "ast", node, child_name, value)
-}
-
-function ast_get_child(s, node, child_name) {
-    return tree_get_child(s, "ast", node, child_name)
-}
-
-function ast_list_children(s, node, out) {
-    return tree_list_children(s, "ast", node, out)
-}
-
-function ast_add_item(s, node, value) {
-    return tree_add_item(s, "ast", node, value)
-}
-
-function ast_get_item(s, node, i) {
-    return tree_get_item(s, "ast", node, i)
-}
-
-function ast_count_items(s, node) {
-    return tree_count_items(s, "ast", node)
-}
-
-function ast_print(s, node) {
-    return tree_print(s, "ast", node)
+function ast_create_node(s, type,    a) {
+    a = tree_create_node(s, type)
+    tree_set_attr(\
+        s, a, "line", s["tokens", s["parser_state", "token_index"], "line"]\
+    )
+    tree_set_attr(\
+        s, a, "col", s["tokens", s["parser_state", "token_index"], "col"]\
+    )
+    return a
 }
 
 function parse(s,    a) {
     s["parser_state", "token_index"] = 1
 
     a = ast_create_node(s, "program")
-    ast_set_child(s, a, "function_decl", parse_function_decl(s))
+    tree_set_child(s, a, "function_decl", parse_function_decl(s))
     return a
 }
 
 function parse_function_decl(s,    a) {
     a = ast_create_node(s, "function_decl")
     parser_expect(s, "int")
-    ast_set_attr(s, a, "name", parser_expect(s, "id"))
+    tree_set_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, "(")
     parser_expect(s, ")")
     parser_expect(s, "{")
-    ast_set_child(s, a, "body", parse_statments(s))
+    tree_set_child(s, a, "body", parse_statments(s))
     parser_expect(s, "}")
     return a
 }
@@ -425,7 +424,7 @@ function parse_statments(s,    a) {
     a = ast_create_node(s, "statements")
 
     while (parser_peek(s) != "}" && parser_peek(s) != "eof") {
-        ast_add_item(s, a, parse_statment(s))
+        tree_add_item(s, a, parse_statment(s))
     }
 
     return a
@@ -453,7 +452,7 @@ function parse_statment(s,    a) {
 function parse_return_statement(s,    a) {
     a = ast_create_node(s, "return")
     parser_expect(s, "return")
-    ast_set_child(s, a, "expr", parse_expr(s, 0))
+    tree_set_child(s, a, "expr", parse_expr(s, 0))
     parser_expect(s, ";")
     return a
 }
@@ -461,7 +460,7 @@ function parse_return_statement(s,    a) {
 function parse_variable_declaration(s,    a) {
     a = ast_create_node(s, "variable_declaration")
     parser_expect(s, "int")
-    ast_set_attr(s, a, "name", parser_expect(s, "id"))
+    tree_set_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, ";")
     return a
 }
@@ -474,25 +473,25 @@ function parse_expr(s, or_statement,    a) {
 function parse_atom(s, or_statement,    a) {
     if (parser_peek(s) == "int") {
         a = ast_create_node(s, "int")
-        ast_set_attr(s, a, "value", parser_advance(s))
+        tree_set_attr(s, a, "value", parser_advance(s))
         return a
     }
 
     if (parser_accept(s, "-")) {
         a = ast_create_node(s, "negate")
-        ast_set_attr(s, a, "expr", parse_expr(s, 0))
+        tree_set_child(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
     if (parser_accept(s, "!")) {
         a = ast_create_node(s, "not")
-        ast_set_attr(s, a, "expr", parse_expr(s, 0))
+        tree_set_child(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
     if (parser_accept(s, "~")) {
         a = ast_create_node(s, "bitwise_not")
-        ast_set_attr(s, a, "expr", parse_expr(s, 0))
+        tree_set_child(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
@@ -551,163 +550,125 @@ function parser_error(s, error_message) {
     )
 }
 
-function lower(s) {
-    ir_init(s)
-    lower_function(s, 2)
+function ir_instruction_void(s, type, block,    l) {
+    l = tree_create_node(s, type)
+    tree_add_item(s, block, l)
+    return l
 }
 
-function lower_function(s, a) {
-    ir_function(s, ast_get_attr(s, a, "name"))
-    ir_block(s)
-    lower_statements(s, ast_get_attr(s, a, "body"))
-}
+function ir_instruction(s, type, block,    l) {
+    l = tree_create_node(s, type)
+    tree_add_item(s, block, l)
 
-function lower_statements(s, a,    i) {}
-
-function lower_statement(s, a,    x, instr) {
-    x = lower_expr(s, ast_get_attr(s, a, "expr"))
-    instr = ir_instruction_void(s, "return")
-    ir_instruction_set_attr(s, instr, "x", x)
-}
-
-function lower_expr(s, a,    instr, x) {
-    if (ast_get_type(s, a) == "int") {
-        instr = ir_instruction(s, "constant")
-        ir_instruction_set_attr(s, instr, "c", ast_get_attr(s, a, "value"))
-        return ir_instruction_get_variable(s, instr)
+    if (!("lower_state@num_temporaries" in s)) {
+        s["lower_state", "num_temporaries"] = 1
+    }
+    else {
+        s["lower_state", "num_temporaries"]++
     }
 
-    if (ast_get_type(s, a) == "bitwise_not") {
-        x = lower_expr(s, ast_get_attr(s, a, "expr"))
-        instr = ir_instruction(s, "bitwise_not")
-        ir_instruction_set_attr(s, instr, "x", x)
-        return ir_instruction_get_variable(s, instr)
+    tree_set_attr(s, l, "variable", "temp$" s["lower_state", "num_temporaries"])
+
+    return l
+}
+
+function ir_get_variable(s, l) {
+    if (!tree_has_attr(s, l, "variable")) {
+        fatal(\
+            sprintf(\
+                "ir_get_variable called on void instruction %s",
+                tree_get_type(s, l)\
+            )\
+        )
     }
 
-    if (ast_get_type(s, a) == "negate") {
-        x = lower_expr(s, ast_get_attr(s, a, "expr"))
-        instr = ir_instruction(s, "negate")
-        ir_instruction_set_attr(s, instr, "x", x)
-        return ir_instruction_get_variable(s, instr)
-    }
-
-    if (ast_get_type(s, a) == "not") {
-        x = lower_expr(s, ast_get_attr(s, a, "expr"))
-        instr = ir_instruction(s, "logical_not")
-        ir_instruction_set_attr(s, instr, "x", x)
-        return ir_instruction_get_variable(s, instr)
-    }
+    return tree_get_attr(s, l, "variable")
 }
 
-function ir_init(s) {
-    s["ir", "num_functions"] = 0
+function lower(s, ast_root) {
+    tree_assert_type(s, ast_root, "program")
+    return lower_function(s, tree_get_child(s, ast_root, "function_decl"))
 }
 
-function ir_curr_function(s) {
-    return "ir@functions@" s["ir", "num_functions"]
+function lower_function(s, a,    l, block) {
+    tree_assert_type(s, a, "function_decl")
+    l = tree_create_node(s, "function")
+    tree_set_attr(s, l, "name", tree_get_attr(s, a, "name"))
+    block = tree_create_node(s, "block")
+    tree_add_item(s, l, block)
+    tree_set_attr(s, block, "number", tree_count_items(s, l))
+    lower_statements(s, tree_get_child(s, a, "body"), block)
+    return l
 }
 
-function ir_curr_block(s) {
-    return ir_curr_function(s) "@blocks@" s[ir_curr_function(s), "num_blocks"]
-}
+function lower_statements(s, a, block,    i) {
+    tree_assert_type(s, a, "statements")
 
-function ir_curr_instruction(s) {
-    return ir_curr_block(s) "@instructions@"\
-        s[ir_curr_block(s), "num_instructions"]
-}
-
-function ir_function(s, name) {
-    s["ir", "num_functions"]++
-    s[ir_curr_function(s), "name"] = name
-    s[ir_curr_function(s), "num_blocks"] = 0
-    s[ir_curr_function(s), "num_variables"] = 0
-}
-
-function ir_block(s) {
-    s[ir_curr_function(s), "num_blocks"]++
-    s[ir_curr_block(s), "num_instructions"] = 0
-}
-
-function ir_instruction_void(s, type) {
-    s[ir_curr_block(s), "num_instructions"]++
-    s[ir_curr_instruction(s), "type"] = type
-    s[ir_curr_instruction(s), "variable"] = ""
-    return ir_curr_instruction(s)
-}
-
-function ir_instruction(s, type) {
-    s[ir_curr_block(s), "num_instructions"]++
-    s[ir_curr_instruction(s), "type"] = type
-    s[ir_curr_function(s), "num_variables"]++
-    s[ir_curr_instruction(s), "variable"] = "$"\
-        s[ir_curr_function(s), "num_variables"]
-    return ir_curr_instruction(s)
-}
-
-function ir_instruction_set_attr(s, instr, key, value) {
-    s[instr, key] = value
-    list_append(s, instr "@attrs", key)
-}
-
-function ir_instruction_get_variable(s, instr, key, value) {
-    return s[ir_curr_instruction(s), "variable"]
-}
-
-function ir_print(s,    i, j, k) {
-    for (i = 1; i <= s["ir", "num_functions"]; i++) {
-        printf("%s() {\n", s["ir", "functions", i, "name"])
-
-        for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
-            printf("  %s.%d:\n", s["ir", "functions", i, "name"], j)
-
-            for (k = 1; k <= s[\
-                "ir", "functions", i, "blocks", j, "num_instructions"\
-            ]; k++) {
-                printf("    ")
-                ir_print_instruction(s, i, j, k)
-            }
-        }
-
-        printf("}\n")
+    for (i = 1; i <= tree_count_items(s, a); i++) {
+        lower_statement(s, tree_get_item(s, a, i), block)
     }
 }
 
-function ir_print_instruction(s, i, j, k,    instr, attrs) {
-    instr = "ir@functions@" i "@blocks@" j "@instructions@" k
-
-    if (s[instr, "variable"]) {
-        printf("%s <- ", s[instr, "variable"])
-    }
-
-    printf("%s", s[instr, "type"])
-    list_get(s, instr "@attrs", attrs)
-
-    for (i in attrs) {
-        printf(" %s=%s", attrs[i], s[instr, attrs[i]])
-    }
-
-    printf("\n")
+function lower_statement(s, a, block,    x, l) {
+    tree_assert_type(s, a, "return")
+    x = lower_expr(s, tree_get_child(s, a, "expr"), block)
+    l = ir_instruction_void(s, "return", block)
+    tree_set_attr(s, l, "x", ir_get_variable(s, x))
+    return l
 }
 
-function codegen(s,    i) {
-    for (i = 1; i <= s["ir", "num_functions"]; i++) {
-        codegen_function(s, i)
+function lower_expr(s, a, block,    l, x) {
+    if (tree_get_type(s, a) == "int") {
+        l = ir_instruction(s, "constant", block)
+        tree_set_attr(s, l, "value", tree_get_attr(s, a, "value"))
+        return l
     }
+
+    if (tree_get_type(s, a) == "bitwise_not") {
+        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
+        l = ir_instruction(s, "bitwise_not", block)
+        tree_set_attr(s, l, "x", ir_get_variable(s, x))
+        return l
+    }
+
+    if (tree_get_type(s, a) == "negate") {
+        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
+        l = ir_instruction(s, "negate", block)
+        tree_set_attr(s, l, "x", ir_get_variable(s, x))
+        return l
+    }
+
+    if (tree_get_type(s, a) == "not") {
+        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
+        l = ir_instruction(s, "logical_not", block)
+        tree_set_attr(s, l, "x", ir_get_variable(s, x))
+        return l
+    }
+
+    fatal(\
+        sprintf(\
+            "node %d has type '%s', expected an expression",
+            a,
+            tree_get_type(s, a)\
+        )\
+    )
 }
 
-function codegen_function(s, i,    j, k) {
-    printf(".globl %s\n", s["ir", "functions", i, "name"])
-    printf("%s:\n", s["ir", "functions", i, "name"])
+function codegen(s, ir_root) {
+    codegen_function(s, ir_root)
+}
 
-    for (j = 1; j <= s["ir", "functions", i, "num_blocks"]; j++) {
-        printf("%s.%d:\n", s["ir", "functions", i, "name"], j)
+function codegen_function(s, l,    funcname, i, block, j) {
+    funcname = tree_get_attr(s, l, "name")
+    printf(".globl %s\n", funcname)
+    printf("%s:\n", funcname)
 
-        for (k = 1; k <= s[\
-            "ir", "functions", i, "blocks", j, "num_instructions"\
-        ]; k++) {
-            codegen_instruction(\
-                s, "ir@functions@" i "@blocks@" j "@instructions@" k\
-            )
+    for (i = 1; i <= tree_count_items(s, l); i++) {
+        printf("%s.%d:\n", funcname, i)
+        block = tree_get_item(s, l, i)
+
+        for (j = 1; j <= tree_count_items(s, block); j++) {
+            codegen_instruction(s, tree_get_item(s, block, j))
         }
     }
 }
@@ -716,43 +677,48 @@ function codegen_get_register(s, variable) {
     return "a0"
 }
 
-function codegen_instruction(s, instr) {
-    if (s[instr, "type"] == "return") {
-        if (codegen_get_register(s, s[instr, "x"]) != "a0") {
-            printf("add a0, %s, x0\n", codegen_get_register(s, s[instr, "x"]))
+function codegen_instruction(s, l,    type) {
+    type = tree_get_type(s, l)
+
+    if (type == "return") {
+        if (codegen_get_register(s, tree_get_attr(s, l, "x")) != "a0") {
+            printf(\
+                "add a0, %s, x0\n",
+                codegen_get_register(s, tree_get_attr(s, l, "x"))\
+            )
         }
 
         printf("ret\n")
     }
-    else if (s[instr, "type"] == "constant") {
+    else if (type == "constant") {
         printf(\
             "li %s, %d\n",
-            codegen_get_register(s, s[instr, "variable"]),
-            s[instr, "c"]\
+            codegen_get_register(s, ir_get_variable(s, l)),
+            tree_get_attr(s, l, "value")\
         )
     }
-    else if (s[instr, "type"] == "negate") {
+    else if (type == "negate") {
         printf(\
             "neg %s, %s\n",
-            codegen_get_register(s, s[instr, "variable"]),
-            codegen_get_register(s, s[instr, "x"])\
+            codegen_get_register(s, ir_get_variable(s, l)),
+            codegen_get_register(s, tree_get_attr(s, l, "x"))\
         )
     }
-    else if (s[instr, "type"] == "logical_not") {
+    else if (type == "logical_not") {
         printf(\
             "seqz %s, %s\n",
-            codegen_get_register(s, s[instr, "variable"]),
-            codegen_get_register(s, s[instr, "x"])\
+            codegen_get_register(s, ir_get_variable(s, l)),
+            codegen_get_register(s, tree_get_attr(s, l, "x"))\
         )
     }
-    else if (s[instr, "type"] == "bitwise_not") {
+    else if (type == "bitwise_not") {
         printf(\
             "not %s, %s\n",
-            codegen_get_register(s, s[instr, "variable"]),
-            codegen_get_register(s, s[instr, "x"])\
+            codegen_get_register(s, ir_get_variable(s, l)),
+            codegen_get_register(s, tree_get_attr(s, l, "x"))\
         )
     }
     else {
-        parser_error(s, sprintf("UNKNOWN INSTRUCTION %s", s[instr, "type"]))
+        fatal(sprintf("can't codegen unknown instruction '%s'", type))
     }
 }
