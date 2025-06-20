@@ -1,0 +1,24 @@
+name: CI
+
+on:
+    push:
+        branches: ["master"]
+    pull_request:
+        branches: ["master"]
+
+    workflow_dispatch:
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install nix
+              uses: cachix/install-nix-action@v22
+            - name: Set up QEMU
+              uses: docker/setup-qemu-action@v3
+
+            - name: Test
+              run: nix develop -c ./test/test.sh
