@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "prettier": "^2.8.8",
+    "prettier-plugin-awk": "file:../prettier-plugin-awk"
+  },
+  "prettier": {
+    "plugins": [
+      "prettier-plugin-awk"
+    ],
+    "tabWidth": 4
+  }
+}

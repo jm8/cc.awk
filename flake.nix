@@ -22,6 +22,13 @@
           devShells.default = pkgsCross.riscv64-musl.mkShell {
             buildInputs = [
               gawk
+              nodejs
+            ];
+          };
+          devShells.prettierInstall = pkgs.mkShell {
+            buildInputs = [
+              nodePackages.npm
+              node-gyp
             ];
           };
         }
