@@ -1,4 +1,4 @@
-#!/usr/bin/env -S awk --posix --lint --exec
+#!/usr/bin/env -S awk -f
 BEGIN {
     SUBSEP = "@"
 

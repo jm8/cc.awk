@@ -1,0 +1,4 @@
+#!/bin/sh
+gawk --lint --posix $@
+# mawk $@
+# busybox awk $@
