@@ -17,7 +17,9 @@ BEGIN {
     sub(/\.c$/, ".s", ASSEMBLY_FILE)
     SOURCE = ""
 
-    while ((getline LINE < INPUT_FILE) > 0) { SOURCE = SOURCE LINE "\n" }
+    while ((getline LINE < INPUT_FILE) > 0) {
+        SOURCE = SOURCE LINE "\n"
+    }
 
     S["input_file"] = INPUT_FILE
     lex(S, SOURCE)
@@ -31,7 +33,7 @@ BEGIN {
     parse(S)
 
     print "/*"
-    ast_print(S)
+    tree_print(S, "ast", 1)
     print "*/\n"
 
     lower(S)
@@ -43,22 +45,211 @@ BEGIN {
     codegen(S)
 }
 
+function fatal(string) {
+    print string >> "/dev/stderr"
+    close("/dev/stderr")
+    exit 1
+}
+
 function list_append(s, key, value) {
-    if (key in s && s[key]) { s[key] = s[key] ":" value }
-    else { s[key] = value }
+    if (key in s && s[key]) {
+        s[key] = s[key] ":" value
+    }
+    else {
+        s[key] = value
+    }
 }
 
-function list_get(s, key, out) {
-    if (key in s && s[key]) { split(s[key], out, ":") }
-    else { split("", out) }
+function list_get(s, key, out,    i) {
+    if (key in s) {
+        split(s[key], out, ":")
+    }
+    else {
+        split("", out)
+    }
 }
 
-function lex(s, source,   line, col, i, token_index, symbol, found) {
+function list_length(s, key,    temp, count) {
+    temp = s[key]
+    count = gsub(/:/, "", temp)
+    return count
+}
+
+function list_contains(s, key, needle,    items, i) {
+    list_get(s, key, items)
+
+    for (i in items) {
+        if (items[i] == needle) {
+            return 1
+        }
+    }
+
+    return 0
+}
+
+function tree_create_node(s, tree_name, type) {
+    if (!(tree_name "@" "node_count" in s)) {
+        s[tree_name, "node_count"] = 0
+    }
+
+    s[tree_name, "node_count"]++
+    s[tree_name, s[tree_name, "node_count"], "type"] = type
+    return s[tree_name, "node_count"]
+}
+
+function tree_get_type(s, tree_name, node) {
+    return s[tree_name, node, "type"]
+}
+
+function tree_has_attr(s, tree_name, node, attr) {
+    return list_contains(s, tree_name "@" node "@" "attrs", attr)
+}
+
+function tree_set_attr(s, tree_name, node, attr, value) {
+    s[tree_name, node, "attrs", attr] = value
+
+    if (!tree_has_attr(s, tree_name, node, attr)) {
+        list_append(s, tree_name "@" node "@" "attrs", attr)
+    }
+}
+
+function tree_get_attr(s, tree_name, node, attr) {
+    if (!tree_has_attr(s, tree_name, node, attr)) {
+        fatal(\
+            sprintf(\
+                "Node %d is missing attr %s (has '%s')",
+                node,
+                attr,
+                s[tree_name, node, "attrs"]\
+            )\
+        )
+    }
+
+    return s[tree_name, node, "attrs", attr]
+}
+
+function tree_list_attrs(s, tree_name, node, out) {
+    list_get(s, tree_name "@" node "@" "attrs", out)
+}
+
+function tree_has_child(s, tree_name, node, child_name) {
+    return list_contains(s, tree_name "@" node "@" "children", child_name)
+}
+
+function tree_set_child(s, tree_name, node, child_name, value) {
+    s[tree_name, node, "children", child_name] = value
+
+    if (!tree_has_child(s, tree_name, node, child_name)) {
+        list_append(s, tree_name "@" node "@" "children", child_name)
+    }
+}
+
+function tree_get_child(s, tree_name, node, child_name) {
+    if (!tree_has_child(s, tree_name, node, child_name)) {
+        fatal(\
+            sprintf(\
+                "Node %d is missing child %s (has '%s')",
+                node,
+                child_name,
+                s[tree_name, node, "children"]\
+            )\
+        )
+    }
+
+    return s[tree_name, node, "children", child_name]
+}
+
+function tree_list_children(s, tree_name, node, out) {
+    list_get(s, tree_name "@" node "@" "children", out)
+}
+
+function tree_add_item(s, tree_name, node, value) {
+    if (!(tree_name "@" node "@" "count_items" in s)) {
+        s[tree_name, node, "count_items"] = 1
+    }
+    else {
+        s[tree_name, node, "count_items"]++
+    }
+
+    s[tree_name, node, "items", s[tree_name, node, "count_items"]] = value
+}
+
+function tree_get_item(s, tree_name, node, i) {
+    if (i > tree_count_items(s, tree_name, node)) {
+        fatal(\
+            sprintf(\
+                "Node %d is missing item %d (has '%d')",
+                node,
+                i,
+                tree_count_items(s, tree_name, node)\
+            )\
+        )
+    }
+
+    return s[tree_name, node, "items", i]
+}
+
+function tree_count_items(s, tree_name, node) {
+    if (!(tree_name "@" node "@" "count_items" in s)) {
+        return 0
+    }
+
+    return s[tree_name, node, "count_items"]
+}
+
+function tree_print(s, tree_name, node) {
+    tree_print_inner(s, tree_name, node, 0)
+}
+
+function print_indent(indent,    i) {
+    for (i = 0; i < indent; i++) {
+        printf(" ")
+    }
+}
+
+function tree_print_inner(s, tree_name, node, indent,    i, j, attrs, children, count_items) {
+    print_indent(indent)
+    printf("type: %s\n", tree_get_type(s, tree_name, node))
+
+    tree_list_attrs(s, tree_name, node, attrs)
+
+    for (i in attrs) {
+        print_indent(indent)
+        printf(\
+            "%s: %s\n", attrs[i], tree_get_attr(s, tree_name, node, attrs[i])\
+        )
+    }
+
+    tree_list_children(s, tree_name, node, children)
+
+    for (i in children) {
+        print_indent(indent)
+        printf("%s:\n", children[i])
+        tree_print_inner(\
+            s,
+            tree_name,
+            tree_get_child(s, tree_name, node, children[i]),
+            indent + 2\
+        )
+    }
+
+    count_items = tree_count_items(s, tree_name, node)
+
+    for (i = 1; i <= count_items; i++) {
+        print_indent(indent)
+        printf("%d:\n", i)
+        tree_print_inner(\
+            s, tree_name, tree_get_item(s, tree_name, node, i), indent + 2\
+        )
+    }
+}
+
+function lex(s, source,    line, col, i, token_index, symbol, found, symbols) {
     token_index = 1
     split(\
         "auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while >>= <<= += -= *= /= %= &= ^= |= >> << ++ -- -> && || <= >= == != ; | { } , = ( ) [ ] . & ! ~ - + * / % < > ^ | ?",
-        SYMBOLS,
-        FS\
+        symbols,
+        " "\
     )
     line = 1
     col = 1
@@ -76,16 +267,20 @@ function lex(s, source,   line, col, i, token_index, symbol, found) {
             line += 1
             col = 1
 
-            if (length(source) == 1) { source = "" }
-            else { source = substr(source, 2) }
+            if (length(source) == 1) {
+                source = ""
+            }
+            else {
+                source = substr(source, 2)
+            }
 
             continue
         }
 
         found = 0
 
-        for (i in SYMBOLS) {
-            symbol = SYMBOLS[i]
+        for (i in symbols) {
+            symbol = symbols[i]
 
             if (\
                 length(source) >= length(symbol) &&
@@ -102,9 +297,11 @@ function lex(s, source,   line, col, i, token_index, symbol, found) {
             }
         }
 
-        if (found) { continue }
+        if (found) {
+            continue
+        }
 
-        match(source, /^[a-zA-Z][a-zA-Z0-9_]**/)
+        match(source, /^[a-zA-Z][a-zA-Z0-9_]*/)
 
         if (RLENGTH >= 1) {
             s["tokens", token_index, "type"] = "id"
@@ -130,15 +327,15 @@ function lex(s, source,   line, col, i, token_index, symbol, found) {
             continue
         }
 
-        printf(\
-            "%s:%d:%d: Unrecognized character\n",
-            INPUT_FILE,
-            line,
-            col > "/dev/stderr"\
+        close(s["input_file"])
+        fatal(\
+            sprintf(\
+                "%s:%d:%d: Unrecognized character\n",
+                s["input_file"],
+                line,
+                col > "/dev/stderr"\
+            )\
         )
-        close(INPUT_FILE)
-        close("/dev/stderr")
-        exit 1
     }
 
     s["tokens", token_index, "type"] = "eof"
@@ -148,44 +345,100 @@ function lex(s, source,   line, col, i, token_index, symbol, found) {
     s["num_tokens"] = token_index
 }
 
-function parse(s,   a) {
-    s["parser_state", "token_index"] = 1
-    s["parser_state", "ast_index"] = 1
+function ast_create_node(s, type) {
+    return tree_create_node(s, "ast", type)
+}
 
-    a = ast_start_node(s, "program")
-    parse_function_decl(s)
-    ast_end_node(s, a)
+function ast_get_type(s, node) {
+    return tree_get_type(s, "ast", node)
+}
+
+function ast_has_attr(s, node, attr) {
+    return tree_has_attr(s, "ast", node, attr)
+}
+
+function ast_set_attr(s, node, attr, value) {
+    return tree_set_attr(s, "ast", node, attr, value)
+}
+
+function ast_get_attr(s, node, attr) {
+    return tree_get_attr(s, "ast", node, attr)
+}
+
+function ast_list_attrs(s, node, out) {
+    return tree_list_attrs(s, "ast", node, out)
+}
+
+function ast_has_child(s, node, child_name) {
+    return tree_has_child(s, "ast", node, child_name)
+}
+
+function ast_set_child(s, node, child_name, value) {
+    return tree_set_child(s, "ast", node, child_name, value)
+}
+
+function ast_get_child(s, node, child_name) {
+    return tree_get_child(s, "ast", node, child_name)
+}
+
+function ast_list_children(s, node, out) {
+    return tree_list_children(s, "ast", node, out)
+}
+
+function ast_add_item(s, node, value) {
+    return tree_add_item(s, "ast", node, value)
+}
+
+function ast_get_item(s, node, i) {
+    return tree_get_item(s, "ast", node, i)
+}
+
+function ast_count_items(s, node) {
+    return tree_count_items(s, "ast", node)
+}
+
+function ast_print(s, node) {
+    return tree_print(s, "ast", node)
+}
+
+function parse(s,    a) {
+    s["parser_state", "token_index"] = 1
+
+    a = ast_create_node(s, "program")
+    ast_set_child(s, a, "function_decl", parse_function_decl(s))
     return a
 }
 
-function parse_function_decl(s,   a) {
-    a = ast_start_node(s, "function_decl")
+function parse_function_decl(s,    a) {
+    a = ast_create_node(s, "function_decl")
     parser_expect(s, "int")
-    ast_set_node_attr(s, a, "name", parser_expect(s, "id"))
+    ast_set_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, "(")
     parser_expect(s, ")")
     parser_expect(s, "{")
-    ast_set_node_subnode(s, a, "body", parse_statments(s))
+    ast_set_child(s, a, "body", parse_statments(s))
     parser_expect(s, "}")
-    ast_end_node(s, a)
     return a
 }
 
-function parse_statments(s,   a) {
-    a = ast_start_node(s, "statements")
+function parse_statments(s,    a) {
+    a = ast_create_node(s, "statements")
 
     while (parser_peek(s) != "}" && parser_peek(s) != "eof") {
-        parse_statment(s)
+        ast_add_item(s, a, parse_statment(s))
     }
 
-    ast_end_node(s, a)
     return a
 }
 
-function parse_statment(s,   a) {
-    if (parser_peek(s) == "return") { return parse_return_statement(s) }
+function parse_statment(s,    a) {
+    if (parser_peek(s) == "return") {
+        return parse_return_statement(s)
+    }
 
-    if (parser_peek(s) == "int") { return parse_variable_declaration(s) }
+    if (parser_peek(s) == "int") {
+        return parse_variable_declaration(s)
+    }
 
     if (parser_peek(s) == "{") {
         parser_expect(s, "{")
@@ -197,52 +450,49 @@ function parse_statment(s,   a) {
     return parse_expr(s, 1)
 }
 
-function parse_return_statement(s,   a) {
-    a = ast_start_node(s, "return")
+function parse_return_statement(s,    a) {
+    a = ast_create_node(s, "return")
     parser_expect(s, "return")
-    ast_set_node_attr(s, a, "expr", parse_expr(s, 0))
+    ast_set_child(s, a, "expr", parse_expr(s, 0))
     parser_expect(s, ";")
-    ast_end_node(s, a)
     return a
 }
 
-function parse_variable_declaration(s,   a) {
-    a = ast_start_node(s, "variable_declaration")
+function parse_variable_declaration(s,    a) {
+    a = ast_create_node(s, "variable_declaration")
     parser_expect(s, "int")
-    ast_set_node_attr(s, a, "name", parser_expect(s, "id"))
+    ast_set_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, ";")
-    ast_end_node(s, a)
     return a
 }
 
-function parse_expr(s, or_statement,   a) { a = parse_atom(s, or_statement) }
+function parse_expr(s, or_statement,    a) {
+    a = parse_atom(s, or_statement)
+    return a
+}
 
-function parse_atom(s, or_statement,   a) {
+function parse_atom(s, or_statement,    a) {
     if (parser_peek(s) == "int") {
-        a = ast_start_node(s, "int")
-        ast_set_node_attr(s, a, "value", parser_advance(s))
-        ast_end_node(s, a)
+        a = ast_create_node(s, "int")
+        ast_set_attr(s, a, "value", parser_advance(s))
         return a
     }
 
     if (parser_accept(s, "-")) {
-        a = ast_start_node(s, "negate")
-        ast_set_node_attr(s, a, "expr", parse_expr(s, 0))
-        ast_end_node(s, a)
+        a = ast_create_node(s, "negate")
+        ast_set_attr(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
     if (parser_accept(s, "!")) {
-        a = ast_start_node(s, "not")
-        ast_set_node_attr(s, a, "expr", parse_expr(s, 0))
-        ast_end_node(s, a)
+        a = ast_create_node(s, "not")
+        ast_set_attr(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
     if (parser_accept(s, "~")) {
-        a = ast_start_node(s, "bitwise_not")
-        ast_set_node_attr(s, a, "expr", parse_expr(s, 0))
-        ast_end_node(s, a)
+        a = ast_create_node(s, "bitwise_not")
+        ast_set_attr(s, a, "expr", parse_expr(s, 0))
         return a
     }
 
@@ -252,11 +502,15 @@ function parse_atom(s, or_statement,   a) {
         return a
     }
 
-    if (or_statement) { parser_error(s, "Expected expression or statement") }
-    else { parser_error(s, "Expected expression") }
+    if (or_statement) {
+        parser_error(s, "Expected expression or statement")
+    }
+    else {
+        parser_error(s, "Expected expression")
+    }
 }
 
-function parser_expect(s, token_type,   value) {
+function parser_expect(s, token_type,    value) {
     if (parser_peek(s) != token_type) {
         parser_error(\
             s, sprintf("Expected %s, found %s", token_type, parser_peek(s))\
@@ -279,86 +533,22 @@ function parser_accept(s, token_type) {
     return 0
 }
 
-function parser_advance(s,   value) {
+function parser_advance(s,    value) {
     value = s["tokens", s["parser_state", "token_index"], "value"]
     s["parser_state", "token_index"]++
     return value
 }
 
 function parser_error(s, error_message) {
-    printf(\
-        "%s:%d:%d: %s\n",
-        s["input_file"],
-        s["tokens", s["parser_state", "token_index"], "line"],
-        s["tokens", s["parser_state", "token_index"], "col"],
-        error_message\
-    ) > "/dev/stderr"
-    close("/dev/stderr")
-    exit 1
-}
-
-function ast_start_node(s, node_type,   ast_index) {
-    s["ast", s["parser_state", "ast_index"], "type"] = node_type
-    s["ast", s["parser_state", "ast_index"], "line"] = s[\
-        "tokens", s["parser_state", "token_index"], "line"\
-    ]
-    s["ast", s["parser_state", "ast_index"], "col"] = s[\
-        "tokens", s["parser_state", "token_index"], "col"\
-    ]
-    ast_index = s["parser_state", "ast_index"]
-    s["parser_state", "ast_index"]++
-    return ast_index
-}
-
-function ast_set_node_attr(s, ast_index, key, value) {
-    s["ast", ast_index, key] = value
-    list_append(s, "ast@" ast_index "@attrs", key)
-}
-
-function ast_set_node_subnode(s, ast_index, key, value) {
-    s["ast", ast_index, key] = value
-    list_append(s, "ast@" ast_index "@subnodes", key)
-}
-
-function ast_get_node_attr(s, ast_index, key) {
-    return s["ast", ast_index, key]
-}
-
-function ast_get_node_attrs(s, ast_index, attrs) {
-    list_get(s, "ast@" ast_index "@attrs", attrs)
-}
-
-function ast_get_node_subnodes(s, ast_index, subnodes) {
-    list_get(s, "ast@" ast_index "@subnodes", subnodes)
-}
-
-function ast_get_node_subnode(s, ast_index, key) {
-    return s["ast", ast_index, key]
-}
-
-function ast_get_node_type(s, ast_index) { return s["ast", ast_index, "type"] }
-
-function ast_print(s) { print_ast_inner(s, 1, 0) }
-
-function print_ast_inner(s, ast_index, indent,   i, attrs, subnodes) {
-    for (i = 0; i < indent; i++) { printf(" ") }
-
-    printf("%s", ast_get_node_type(s, ast_index))
-    ast_get_node_attrs(s, ast_index, attrs)
-
-    for (i in attrs) {
-        printf(" %s=%s", attrs[i], ast_get_node_attr(s, ast_index, attrs[i]))
-    }
-
-    ast_get_node_subnodes(s, ast_index, subnodes)
-
-    for (i in subnodes) {
-        printf(" %s: ", subnodes[i])
-        print_ast_inner()
-    }
-
-    printf("\n")
-    return end
+    fatal(\
+        sprintf(\
+            "%s:%d:%d: %s\n",
+            s["input_file"],
+            s["tokens", s["parser_state", "token_index"], "line"],
+            s["tokens", s["parser_state", "token_index"], "col"],
+            error_message\
+        )\
+    )
 }
 
 function lower(s) {
@@ -367,58 +557,55 @@ function lower(s) {
 }
 
 function lower_function(s, a) {
-    ir_function(s, ast_get_node_attr(s, a, "name"))
+    ir_function(s, ast_get_attr(s, a, "name"))
     ir_block(s)
-    lower_statements(s, ast_get_node_attr(s, a, "body"))
+    lower_statements(s, ast_get_attr(s, a, "body"))
 }
 
-function lower_statements(s, a,   curr, instr) {
-    curr = a + 1
+function lower_statements(s, a,    i) {}
 
-    while (curr < ast_get_node_end(s, a)) {
-        lower_statement(s, curr)
-        curr = ast_get_node_end(s, curr) + 1
-    }
-}
-
-function lower_statement(s, a,   x, instr) {
-    x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+function lower_statement(s, a,    x, instr) {
+    x = lower_expr(s, ast_get_attr(s, a, "expr"))
     instr = ir_instruction_void(s, "return")
     ir_instruction_set_attr(s, instr, "x", x)
 }
 
-function lower_expr(s, a,   instr, x) {
-    if (ast_get_node_type(s, a) == "int") {
+function lower_expr(s, a,    instr, x) {
+    if (ast_get_type(s, a) == "int") {
         instr = ir_instruction(s, "constant")
-        ir_instruction_set_attr(s, instr, "c", ast_get_node_attr(s, a, "value"))
+        ir_instruction_set_attr(s, instr, "c", ast_get_attr(s, a, "value"))
         return ir_instruction_get_variable(s, instr)
     }
 
-    if (ast_get_node_type(s, a) == "bitwise_not") {
-        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+    if (ast_get_type(s, a) == "bitwise_not") {
+        x = lower_expr(s, ast_get_attr(s, a, "expr"))
         instr = ir_instruction(s, "bitwise_not")
         ir_instruction_set_attr(s, instr, "x", x)
         return ir_instruction_get_variable(s, instr)
     }
 
-    if (ast_get_node_type(s, a) == "negate") {
-        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+    if (ast_get_type(s, a) == "negate") {
+        x = lower_expr(s, ast_get_attr(s, a, "expr"))
         instr = ir_instruction(s, "negate")
         ir_instruction_set_attr(s, instr, "x", x)
         return ir_instruction_get_variable(s, instr)
     }
 
-    if (ast_get_node_type(s, a) == "not") {
-        x = lower_expr(s, ast_get_node_attr(s, a, "expr"))
+    if (ast_get_type(s, a) == "not") {
+        x = lower_expr(s, ast_get_attr(s, a, "expr"))
         instr = ir_instruction(s, "logical_not")
         ir_instruction_set_attr(s, instr, "x", x)
         return ir_instruction_get_variable(s, instr)
     }
 }
 
-function ir_init(s) { s["ir", "num_functions"] = 0 }
+function ir_init(s) {
+    s["ir", "num_functions"] = 0
+}
 
-function ir_curr_function(s) { return "ir@functions@" s["ir", "num_functions"] }
+function ir_curr_function(s) {
+    return "ir@functions@" s["ir", "num_functions"]
+}
 
 function ir_curr_block(s) {
     return ir_curr_function(s) "@blocks@" s[ir_curr_function(s), "num_blocks"]
@@ -466,7 +653,7 @@ function ir_instruction_get_variable(s, instr, key, value) {
     return s[ir_curr_instruction(s), "variable"]
 }
 
-function ir_print(s,   i, j, k) {
+function ir_print(s,    i, j, k) {
     for (i = 1; i <= s["ir", "num_functions"]; i++) {
         printf("%s() {\n", s["ir", "functions", i, "name"])
 
@@ -485,24 +672,30 @@ function ir_print(s,   i, j, k) {
     }
 }
 
-function ir_print_instruction(s, i, j, k,   instr, attrs) {
+function ir_print_instruction(s, i, j, k,    instr, attrs) {
     instr = "ir@functions@" i "@blocks@" j "@instructions@" k
 
-    if (s[instr, "variable"]) { printf("%s <- ", s[instr, "variable"]) }
+    if (s[instr, "variable"]) {
+        printf("%s <- ", s[instr, "variable"])
+    }
 
     printf("%s", s[instr, "type"])
     list_get(s, instr "@attrs", attrs)
 
-    for (i in attrs) { printf(" %s=%s", attrs[i], s[instr, attrs[i]]) }
+    for (i in attrs) {
+        printf(" %s=%s", attrs[i], s[instr, attrs[i]])
+    }
 
     printf("\n")
 }
 
-function codegen(s,   i) {
-    for (i = 1; i <= s["ir", "num_functions"]; i++) { codegen_function(s, i) }
+function codegen(s,    i) {
+    for (i = 1; i <= s["ir", "num_functions"]; i++) {
+        codegen_function(s, i)
+    }
 }
 
-function codegen_function(s, i,   j, k) {
+function codegen_function(s, i,    j, k) {
     printf(".globl %s\n", s["ir", "functions", i, "name"])
     printf("%s:\n", s["ir", "functions", i, "name"])
 
@@ -519,7 +712,9 @@ function codegen_function(s, i,   j, k) {
     }
 }
 
-function codegen_get_register(s, variable) { return "a0" }
+function codegen_get_register(s, variable) {
+    return "a0"
+}
 
 function codegen_instruction(s, instr) {
     if (s[instr, "type"] == "return") {
