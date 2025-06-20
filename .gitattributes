@@ -1,2 +1,3 @@
 test/** linguist-vendored
 flake.nix linguist-vendored
+.envrc linguist-vendored
