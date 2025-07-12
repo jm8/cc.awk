@@ -375,6 +375,10 @@ function parse_statement(s,    a, expr) {
         return parse_variable_declaration(s)
     }
 
+    if (parser_peek(s) == "if") {
+        return parse_if_statement(s)
+    }
+
     if (parser_peek(s) == "{") {
         parser_expect(s, "{")
         a = parse_statements(s)
@@ -402,6 +406,21 @@ function parse_variable_declaration(s,    a) {
     parser_expect(s, "int")
     tree_set_attr(s, a, "name", parser_expect(s, "id"))
     parser_expect(s, ";")
+    return a
+}
+
+function parse_if_statement(s,    a) {
+    a = ast_create_node(s, "if")
+    parser_expect(s, "if")
+    parser_expect(s, "(")
+    tree_set_child(s, a, "condition", parse_expr(s, 0))
+    parser_expect(s, ")")
+    tree_set_child(s, a, "true_block", parse_statement(s))
+
+    if (parser_accept(s, "else")) {
+        tree_set_child(s, a, "false_block", parse_statement(s))
+    }
+
     return a
 }
 
@@ -546,15 +565,15 @@ function parser_error(s, error_message) {
     )
 }
 
-function ir_instruction_void(s, type, block,    l) {
+function ir_instruction_void(s, type, cursor,    l) {
     l = tree_create_node(s, type)
-    tree_add_item(s, block, l)
+    tree_add_item(s, cursor["block"], l)
     return l
 }
 
-function ir_instruction_temp(s, type, block,    l) {
+function ir_instruction_temp(s, type, cursor,    l) {
     l = tree_create_node(s, type)
-    tree_add_item(s, block, l)
+    tree_add_item(s, cursor["block"], l)
 
     if (!("lower_state@num_temporaries" in s)) {
         s["lower_state", "num_temporaries"] = 1
@@ -596,75 +615,147 @@ function ir_get_operand2(s, l) {
     return tree_get_attr(s, l, "operand2")
 }
 
+function ir_set_target(s, l, target) {
+    tree_set_attr(s, l, "target", target)
+}
+
 function lower(s, ast_root) {
     tree_assert_type(s, ast_root, "program")
     return lower_function(s, tree_get_child(s, ast_root, "function_decl"))
 }
 
-function lower_function(s, a,    l, block) {
+function lower_function(s, a,    l, cursor) {
     tree_assert_type(s, a, "function_decl")
     l = tree_create_node(s, "function")
     tree_set_attr(s, l, "name", tree_get_attr(s, a, "name"))
-    block = tree_create_node(s, "block")
-    tree_add_item(s, l, block)
-    tree_set_attr(s, block, "number", tree_count_items(s, l))
-    lower_statements(s, tree_get_child(s, a, "body"), block)
+    cursor["function"] = l
+    cursor["block"] = tree_create_node(s, "block")
+    tree_add_item(s, cursor["function"], cursor["block"])
+    tree_set_attr(s, cursor["block"], "number", tree_count_items(s, l))
+    lower_statement(s, tree_get_child(s, a, "body"), cursor)
     return l
 }
 
-function lower_statements(s, a, block,    i) {
+function lower_statements(s, a, cursor,    i) {
     tree_assert_type(s, a, "statements")
 
     for (i = 1; i <= tree_count_items(s, a); i++) {
-        lower_statement(s, tree_get_item(s, a, i), block)
+        lower_statement(s, tree_get_item(s, a, i), cursor)
     }
 }
 
-function lower_statement(s, a, block,    x, l, type) {
+function lower_statement(s, a, cursor,    x, l, type) {
     type = tree_get_type(s, a)
 
     if (type == "variable_declaration") {
         # do nothing
     }
     else if (type == "return") {
-        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
-        l = ir_instruction_void(s, "return", block)
+        x = lower_expr(s, tree_get_child(s, a, "expr"), cursor)
+        l = ir_instruction_void(s, "return", cursor)
         ir_set_operand1(s, l, x)
     }
+    else if (type == "if") {
+        lower_if(s, a, cursor)
+    }
     else if (type == "expr_stat") {
-        lower_expr(s, tree_get_child(s, a, "expr"), block)
+        lower_expr(s, tree_get_child(s, a, "expr"), cursor)
+    }
+    else if (type == "statements") {
+        lower_statements(s, a, cursor)
     }
     else {
         fatal(sprintf("node %d has type '%s', expected a statement", a, tree_get_type(s, a)))
     }
 }
 
-function lower_expr(s, a, block,    l, x, variable_name, lhs, rhs, binops, i, type) {
+function lower_if(s, a, cursor,    has_false, cond, jz, jmp, false_block, after_block) {
+    tree_assert_type(s, a, "if")
+    has_false = tree_has_child(s, a, "false_block")
+    #
+    # jz condition after_block
+    #  ... (if true)
+    # after_block:
+    # ...
+    # Or
+    # jz condition false_block
+    #  ... (if true)
+    #  jmp after_block
+    # false_block:
+    #  ... (if false)
+    # after_block:
+    # ...
+    if (has_false) {
+        false_block = lower_create_block(s, cursor)
+        lower_statement_to_block(s, tree_get_child(s, a, "false_block"), cursor, false_block)
+    }
+
+    after_block = lower_create_block(s, cursor)
+
+    cond = lower_expr(s, tree_get_child(s, a, "condition"), cursor)
+    jz = ir_instruction_void(s, "jz", cursor)
+    ir_set_operand1(s, jz, cond)
+
+    if (has_false) {
+        ir_set_target(s, jz, false_block)
+    }
+    else {
+        ir_set_target(s, jz, after_block)
+    }
+
+    lower_statement(s, tree_get_child(s, a, "true_block"), cursor)
+
+    if (has_false) {
+        jmp = ir_instruction_void(s, "jmp", cursor)
+        ir_set_target(s, jmp, after_block)
+    }
+
+    lower_switch_block(s, cursor, after_block)
+}
+
+function lower_statement_to_block(s, a, cursor, block,    oldblock) {
+    oldblock = cursor["block"]
+    lower_switch_block(s, cursor, block)
+    lower_statement(s, a, cursor)
+    lower_switch_block(s, cursor, oldblock)
+}
+
+function lower_create_block(s, cursor,    block) {
+    block = tree_create_node(s, "block")
+    tree_add_item(s, cursor["function"], block)
+    return block
+}
+
+function lower_switch_block(s, cursor, block) {
+    cursor["block"] = block
+}
+
+function lower_expr(s, a, cursor,    l, x, variable_name, lhs, rhs, binops, i, type) {
     type = tree_get_type(s, a)
 
     if (type == "int") {
-        l = ir_instruction_temp(s, "constant", block)
+        l = ir_instruction_temp(s, "constant", cursor)
         tree_set_attr(s, l, "value", tree_get_attr(s, a, "value"))
         return l
     }
 
     if (type == "bitwise_not") {
-        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
-        l = ir_instruction_temp(s, "bitwise_not", block)
+        x = lower_expr(s, tree_get_child(s, a, "expr"), cursor)
+        l = ir_instruction_temp(s, "bitwise_not", cursor)
         ir_set_operand1(s, l, x)
         return l
     }
 
     if (type == "negate") {
-        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
-        l = ir_instruction_temp(s, "negate", block)
+        x = lower_expr(s, tree_get_child(s, a, "expr"), cursor)
+        l = ir_instruction_temp(s, "negate", cursor)
         ir_set_operand1(s, l, x)
         return l
     }
 
     if (type == "not") {
-        x = lower_expr(s, tree_get_child(s, a, "expr"), block)
-        l = ir_instruction_temp(s, "logical_not", block)
+        x = lower_expr(s, tree_get_child(s, a, "expr"), cursor)
+        l = ir_instruction_temp(s, "logical_not", cursor)
         ir_set_operand1(s, l, x)
         return l
     }
@@ -674,14 +765,14 @@ function lower_expr(s, a, block,    l, x, variable_name, lhs, rhs, binops, i, ty
         rhs = tree_get_child(s, a, "rhs")
         tree_assert_type(s, lhs, "variable")
         variable_name = tree_get_attr(s, lhs, "name")
-        x = lower_expr(s, rhs, block)
+        x = lower_expr(s, rhs, cursor)
 
         if (ir_is_variable_temp(ir_get_variable(s, x))) {
             tree_set_attr(s, x, "variable", variable_name)
             return x
         }
         else {
-            l = ir_instruction_temp(s, "mov", block)
+            l = ir_instruction_temp(s, "mov", cursor)
             tree_set_attr(s, l, "variable", variable_name)
             ir_set_operand1(s, l, x)
             return l
@@ -689,7 +780,7 @@ function lower_expr(s, a, block,    l, x, variable_name, lhs, rhs, binops, i, ty
     }
 
     if (type == "variable") {
-        # Return fake instruction that will not be added to the block that only contains the "variable" field
+        # Return fake instruction that will not be added to the cursor that only contains the "variable" field
         l = tree_create_node(s, "variable")
         tree_set_attr(s, l, "variable", tree_get_attr(s, a, "name"))
         return l
@@ -699,9 +790,9 @@ function lower_expr(s, a, block,    l, x, variable_name, lhs, rhs, binops, i, ty
 
     for (i in binops) {
         if (type == binops[i]) {
-            lhs = lower_expr(s, tree_get_child(s, a, "lhs"), block)
-            rhs = lower_expr(s, tree_get_child(s, a, "rhs"), block)
-            l = ir_instruction_temp(s, binops[i], block)
+            lhs = lower_expr(s, tree_get_child(s, a, "lhs"), cursor)
+            rhs = lower_expr(s, tree_get_child(s, a, "rhs"), cursor)
+            l = ir_instruction_temp(s, binops[i], cursor)
             ir_set_operand1(s, l, lhs)
             ir_set_operand2(s, l, rhs)
             return l
@@ -885,8 +976,8 @@ function codegen_function(s, l,    func_name, i, block, j, registers, var) {
     printf("%s:\n", func_name)
 
     for (i = 1; i <= tree_count_items(s, l); i++) {
-        printf("%s.%d:\n", func_name, i)
         block = tree_get_item(s, l, i)
+        printf("block.%d:\n", block)
 
         for (j = 1; j <= tree_count_items(s, block); j++) {
             codegen_instruction(s, tree_get_item(s, block, j), registers)
@@ -894,7 +985,7 @@ function codegen_function(s, l,    func_name, i, block, j, registers, var) {
     }
 }
 
-function codegen_instruction(s, l, registers,    type, dest, src1, src2) {
+function codegen_instruction(s, l, registers,    type, dest, src1, src2, target) {
     type = tree_get_type(s, l)
 
     if (tree_has_attr(s, l, "variable")) {
@@ -907,6 +998,10 @@ function codegen_instruction(s, l, registers,    type, dest, src1, src2) {
 
     if (tree_has_attr(s, l, "operand2")) {
         src2 = registers[ir_get_operand2(s, l)]
+    }
+
+    if (tree_has_attr(s, l, "target")) {
+        target = tree_get_attr(s, l, "target")
     }
 
     if (type == "return") {
@@ -945,6 +1040,12 @@ function codegen_instruction(s, l, registers,    type, dest, src1, src2) {
     }
     else if (type == "mod") {
         printf("rem %s, %s, %s\n", dest, src1, src2)
+    }
+    else if (type == "jz") {
+        printf("beq %s, x0, block.%d\n", src1, target)
+    }
+    else if (type == "jmp") {
+        printf("j block.%d\n", target)
     }
     else {
         fatal(sprintf("can't codegen unknown instruction '%s'", type))
