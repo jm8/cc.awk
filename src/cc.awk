@@ -2,48 +2,91 @@
 BEGIN {
     SUBSEP = "@"
 
-    if (ARGC != 2) {
-        print "Usage: cc.awk program.c"
-        exit 1
-    }
-
     for (ARGNO = 1; ARGNO < ARGC; ARGNO++) {
-        ARG = ARGV[ARGNO]
+        ARGV_COPY[ARGNO] = ARGV[ARGNO]
         delete ARGV[ARGNO]
     }
 
-    INPUT_FILE = ARG
-    ASSEMBLY_FILE = INPUT_FILE
-    sub(/\.c$/, ".s", ASSEMBLY_FILE)
-    SOURCE = ""
+    main(ARGV_COPY, ARGC)
+}
 
-    while ((getline LINE < INPUT_FILE) > 0) {
-        SOURCE = SOURCE LINE "\n"
+function main(argv, argc,    i, arg, infile, found_infile, outfile, found_outfile, arch, found_arch, source, line, s, ast_root, ir) {
+    i = 1
+    found_outfile = 0
+    found_infile = 0
+    found_arch = 0
+
+    while (i < argc) {
+        if (argv[i] == "-o") {
+            found_outfile = 1
+            outfile = argv[++i]
+        }
+        else if (argv[i] == "-a") {
+            found_arch = 1
+            arch = argv[++i]
+
+            if (arch != "riscv") {
+                print_help()
+                exit 1
+            }
+        }
+        else if (argv[i] == "-h") {
+            print_help()
+            return
+        }
+        else if (substr(argv[i], 1, 1) == "-") {
+            print_help()
+            exit 1
+        }
+        else {
+            found_infile = 1
+            infile = argv[i]
+        }
+
+        i++
     }
 
-    S["input_file"] = INPUT_FILE
-    lex(S, SOURCE)
-    # print "/*"
-    # for (I = 1; I <= S["num_tokens"]; I++) {
-    #     print S["tokens", I, "type"], S["tokens", I, "value"]
-    # }
-    # printf("*/\n")
-    close(INPUT_FILE)
+    if (!found_infile) {
+        print_help()
+        exit 1
+    }
 
-    AST_ROOT = parse(S)
+    if (!found_arch) {
+        print_help()
+        exit 1
+    }
+
+    if (!found_outfile) {
+        outfile = infile
+        sub(/\.c$/, ".o", outfile)
+    }
+
+    source = ""
+
+    while ((getline line < infile) > 0) {
+        source = source line "\n"
+    }
+
+    s["input_file"] = infile
+    lex(s, source)
+    close(infile)
+
+    ast_root = parse(s)
 
     print "/*"
-    tree_print(S, AST_ROOT)
+    tree_print(s, ast_root)
     print "*/\n"
 
-    IR = lower(S, AST_ROOT)
+    ir = lower(s, ast_root)
 
     print "/*"
-    tree_print(S, IR)
+    tree_print(s, ir)
     print "*/\n"
 
-    codegen(S, IR)
+    codegen(s, ir)
 }
+
+function print_help() {}
 
 function fatal(string) {
     print string >> "/dev/stderr"
