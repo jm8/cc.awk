@@ -58,7 +58,7 @@ function main(argv, argc,    i, arg, infile, found_infile, outfile, found_outfil
 
     if (!found_outfile) {
         outfile = infile
-        sub(/\.c$/, ".o", outfile)
+        sub(/\.c$/, ".s", outfile)
     }
 
     source = ""
@@ -68,22 +68,26 @@ function main(argv, argc,    i, arg, infile, found_infile, outfile, found_outfil
     }
 
     s["input_file"] = infile
+    s["output_file"] = outfile
+
     lex(s, source)
     close(infile)
 
     ast_root = parse(s)
 
-    print "/*"
+    print "/*" > outfile
     tree_print(s, ast_root)
-    print "*/\n"
+    print "*/\n" > outfile
 
     ir = lower(s, ast_root)
 
-    print "/*"
+    print "/*" > outfile
     tree_print(s, ir)
-    print "*/\n"
+    print "*/\n" > outfile
 
     codegen(s, ir)
+
+    close(outfile)
 }
 
 function print_help() {}
@@ -243,41 +247,41 @@ function tree_count_items(s, node) {
 }
 
 function tree_print(s, node) {
-    tree_print_inner(s, node, 0)
+    tree_print_inner(s, node, 0, s["output_file"])
 }
 
-function print_indent(indent,    i) {
+function print_indent(out, indent,    i) {
     for (i = 0; i < indent; i++) {
-        printf(" ")
+        printf(" ") > out
     }
 }
 
-function tree_print_inner(s, node, indent,    i, j, attrs, children, count_items) {
-    print_indent(indent)
-    printf("%s(%d)", tree_get_type(s, node), node)
+function tree_print_inner(s, node, indent, out,    i, j, attrs, children, count_items) {
+    print_indent(out, indent)
+    printf("%s(%d)", tree_get_type(s, node), node) > out
 
     tree_list_attrs(s, node, attrs)
 
     for (i in attrs) {
-        printf(" %s=%s", attrs[i], tree_get_attr(s, node, attrs[i]))
+        printf(" %s=%s", attrs[i], tree_get_attr(s, node, attrs[i])) > out
     }
 
-    printf("\n")
+    printf("\n") > out
 
     tree_list_children(s, node, children)
 
     for (i in children) {
-        print_indent(indent)
-        printf("%s:\n", children[i])
-        tree_print_inner(s, tree_get_child(s, node, children[i]), indent + 2)
+        print_indent(out, indent)
+        printf("%s:\n", children[i]) > out
+        tree_print_inner(s, tree_get_child(s, node, children[i]), indent + 2, out)
     }
 
     count_items = tree_count_items(s, node)
 
     for (i = 1; i <= count_items; i++) {
-        print_indent(indent)
-        printf("%d:\n", i)
-        tree_print_inner(s, tree_get_item(s, node, i), indent + 2)
+        print_indent(out, indent)
+        printf("%d:\n", i) > out
+        tree_print_inner(s, tree_get_item(s, node, i), indent + 2, out)
     }
 }
 
@@ -1006,21 +1010,21 @@ function codegen(s, ir_root) {
 function codegen_function(s, l,    func_name, i, block, j, registers, var) {
     linear_scan_register_allocation(s, l, registers)
     func_name = tree_get_attr(s, l, "name")
-    printf(".globl %s\n", func_name)
+    printf(".globl %s\n", func_name) > s["output_file"]
 
-    printf("\n/*\n")
+    printf("\n/*\n") > s["output_file"]
 
     for (var in registers) {
-        printf("%s -> %s\n", var, registers[var])
+        printf("%s -> %s\n", var, registers[var]) > s["output_file"]
     }
 
-    printf("*/\n\n")
+    printf("*/\n\n") > s["output_file"]
 
-    printf("%s:\n", func_name)
+    printf("%s:\n", func_name) > s["output_file"]
 
     for (i = 1; i <= tree_count_items(s, l); i++) {
         block = tree_get_item(s, l, i)
-        printf("block.%d:\n", block)
+        printf("block.%d:\n", block) > s["output_file"]
 
         for (j = 1; j <= tree_count_items(s, block); j++) {
             codegen_instruction(s, tree_get_item(s, block, j), registers)
@@ -1028,7 +1032,8 @@ function codegen_function(s, l,    func_name, i, block, j, registers, var) {
     }
 }
 
-function codegen_instruction(s, l, registers,    type, dest, src1, src2, target) {
+function codegen_instruction(s, l, registers,    type, dest, src1, src2, target, out) {
+    out = s["output_file"]
     type = tree_get_type(s, l)
 
     if (tree_has_attr(s, l, "variable")) {
@@ -1049,48 +1054,48 @@ function codegen_instruction(s, l, registers,    type, dest, src1, src2, target)
 
     if (type == "return") {
         if (src1 != "a0") {
-            printf("mv a0, %s\n", src1)
+            printf("mv a0, %s\n", src1) > out
         }
 
-        printf("ret\n")
+        printf("ret\n") > out
     }
     else if (type == "constant") {
-        printf("li %s, %d\n", dest, tree_get_attr(s, l, "value"))
+        printf("li %s, %d\n", dest, tree_get_attr(s, l, "value")) > out
     }
     else if (type == "negate") {
-        printf("neg %s, %s\n", dest, src1)
+        printf("neg %s, %s\n", dest, src1) > out
     }
     else if (type == "logical_not") {
-        printf("seqz %s, %s\n", dest, src1)
+        printf("seqz %s, %s\n", dest, src1) > out
     }
     else if (type == "bitwise_not") {
-        printf("not %s, %s\n", dest, src1)
+        printf("not %s, %s\n", dest, src1) > out
     }
     else if (type == "mov") {
-        printf("mv %s, %s\n", dest, src1)
+        printf("mv %s, %s\n", dest, src1) > out
     }
     else if (type == "add") {
-        printf("add %s, %s, %s\n", dest, src1, src2)
+        printf("add %s, %s, %s\n", dest, src1, src2) > out
     }
     else if (type == "sub") {
-        printf("sub %s, %s, %s\n", dest, src1, src2)
+        printf("sub %s, %s, %s\n", dest, src1, src2) > out
     }
     else if (type == "mul") {
-        printf("mul %s, %s, %s\n", dest, src1, src2)
+        printf("mul %s, %s, %s\n", dest, src1, src2) > out
     }
     else if (type == "div") {
-        printf("div %s, %s, %s\n", dest, src1, src2)
+        printf("div %s, %s, %s\n", dest, src1, src2) > out
     }
     else if (type == "mod") {
-        printf("rem %s, %s, %s\n", dest, src1, src2)
+        printf("rem %s, %s, %s\n", dest, src1, src2) > out
     }
     else if (type == "jz") {
-        printf("beq %s, x0, block.%d\n", src1, target)
+        printf("beq %s, x0, block.%d\n", src1, target) > out
     }
     else if (type == "jmp") {
-        printf("j block.%d\n", target)
+        printf("j block.%d\n", target) > out
     }
     else {
-        fatal(sprintf("can't codegen unknown instruction '%s'", type))
+        fatal(sprintf("can't codegen unknown instruction '%s'", type)) > out
     }
 }

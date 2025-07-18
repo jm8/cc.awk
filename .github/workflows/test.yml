@@ -21,4 +21,4 @@ jobs:
               uses: docker/setup-qemu-action@v3
 
             - name: Test
-              run: nix develop -c ./test/testall.sh
+              run: nix develop -c ./test/test.py
